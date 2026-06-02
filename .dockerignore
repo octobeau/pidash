@@ -1,0 +1,8 @@
+.git
+.gitignore
+node_modules
+npm-debug.log*
+data
+certs
+config/piholes.json
+docker-compose.override.yml

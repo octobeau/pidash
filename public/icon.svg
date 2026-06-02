@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Pi-hole Multi-Dashboard</title>
+  <desc id="desc">A shield with network nodes and a blocked query mark.</desc>
+  <defs>
+    <linearGradient id="shield" x1="21" y1="8" x2="109" y2="119" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#39d98a"/>
+      <stop offset="0.52" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#4c9ffe"/>
+    </linearGradient>
+    <linearGradient id="face" x1="35" y1="25" x2="93" y2="101" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#182426"/>
+      <stop offset="1" stop-color="#0b1011"/>
+    </linearGradient>
+  </defs>
+  <path fill="#07100d" d="M64 6 18 22v34c0 31.4 18.5 53.6 46 66 27.5-12.4 46-34.6 46-66V22L64 6Z"/>
+  <path fill="url(#shield)" d="M64 11 23 25.4V56c0 27.4 15.8 47.3 41 59.2 25.2-11.9 41-31.8 41-59.2V25.4L64 11Z"/>
+  <path fill="url(#face)" d="M64 23.5 35 33.8v23.6c0 20.8 10.8 36 29 45.7 18.2-9.7 29-24.9 29-45.7V33.8L64 23.5Z"/>
+  <path fill="none" stroke="#9ff6cb" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" d="M42 71c11.8-13 32.2-13 44 0"/>
+  <circle cx="42" cy="71" r="8" fill="#39d98a"/>
+  <circle cx="64" cy="57" r="8" fill="#22d3ee"/>
+  <circle cx="86" cy="71" r="8" fill="#4c9ffe"/>
+  <path fill="none" stroke="#f97373" stroke-width="7" stroke-linecap="round" d="M45 38 83 92"/>
+  <path fill="none" stroke="#f97373" stroke-width="7" stroke-linecap="round" d="M83 38 45 92"/>
+  <circle cx="64" cy="65" r="25" fill="none" stroke="#edf4f2" stroke-opacity=".9" stroke-width="6"/>
+</svg>

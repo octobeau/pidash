@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pi-hole Multi-Dashboard</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/icon.svg">
+    <link rel="stylesheet" href="/styles.css?v=5">
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <img class="mark" src="/icon.svg" alt="" aria-hidden="true">
+        <div>
+          <h1>Pi-hole Multi-Dashboard</h1>
+          <p id="subtitle">Loading servers</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div class="refresh-state">
+          <span class="live-dot" id="liveDot"></span>
+          <span id="refreshLabel">Waiting</span>
+        </div>
+        <button class="icon-button active" id="autoButton" title="Toggle auto refresh" aria-label="Toggle auto refresh">Auto</button>
+        <button class="icon-button" id="refreshButton" title="Refresh now" aria-label="Refresh now">Refresh</button>
+        <button class="icon-button" id="settingsButton" title="Settings" aria-label="Settings">Settings</button>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section class="summary-grid" id="summaryGrid"></section>
+
+      <nav class="tabs" aria-label="Dashboard views">
+        <button class="tab active" data-tab="overview">Overview</button>
+        <button class="tab" data-tab="lists">Top Lists</button>
+        <button class="tab" data-tab="compare">Compare</button>
+      </nav>
+
+      <section class="tab-panel active" id="overview"></section>
+      <section class="tab-panel" id="lists"></section>
+      <section class="tab-panel" id="compare"></section>
+    </main>
+
+    <dialog class="settings" id="settingsDialog">
+      <form method="dialog">
+        <div class="dialog-head">
+          <h2>Settings</h2>
+          <button class="plain-button" value="cancel" aria-label="Close">Close</button>
+        </div>
+      </form>
+      <div class="dialog-body">
+        <div class="settings-toolbar">
+          <button id="addServerButton" class="solid-button" type="button">Add Server</button>
+          <button id="useDockerConfigButton" class="plain-button" type="button">Reload Servers</button>
+        </div>
+        <div id="settingsServers"></div>
+        <label class="field small-field">
+          <span>Refresh Seconds</span>
+          <input id="refreshSeconds" type="number" min="5" max="300" step="5">
+        </label>
+      </div>
+      <div class="dialog-foot">
+        <button id="saveSettingsButton" class="solid-button" type="button">Save</button>
+      </div>
+    </dialog>
+
+    <script src="/app.js?v=5" type="module"></script>
+  </body>
+</html>
