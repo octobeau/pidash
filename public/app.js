@@ -109,17 +109,17 @@ function render() {
 function renderSummary() {
   const totals = state.snapshot?.totals || {};
   const metrics = [
-    ["Total Queries", fmt(totals.queries), "var(--green)"],
-    ["Blocked", fmt(totals.blocked), "var(--red)"],
-    ["Block Rate", pct(totals.blockRate), "var(--blue)"],
-    ["Domains", fmt(totals.domains), "var(--violet)"],
-    ["Forwarded", fmt(totals.forwarded), "var(--amber)"],
-    ["Clients", fmt(totals.clients), "var(--soft)"]
+    ["Total Queries", fmt(totals.queries), "tone-green"],
+    ["Blocked", fmt(totals.blocked), "tone-red"],
+    ["Block Rate", pct(totals.blockRate), "tone-blue"],
+    ["Domains", fmt(totals.domains), "tone-violet"],
+    ["Forwarded", fmt(totals.forwarded), "tone-amber"],
+    ["Clients", fmt(totals.clients), "tone-soft"]
   ];
-  els.summaryGrid.innerHTML = metrics.map(([label, value, color]) => `
+  els.summaryGrid.innerHTML = metrics.map(([label, value, tone]) => `
     <article class="metric">
       <span>${escapeHtml(label)}</span>
-      <strong style="color:${color}">${escapeHtml(value)}</strong>
+      <strong class="${tone}">${escapeHtml(value)}</strong>
     </article>
   `).join("");
 }
@@ -149,14 +149,14 @@ function serverCard(server, index) {
       </div>
       <div class="card-body">
         <div class="mini-grid">
-          ${mini("Queries", fmt(s.queries), "var(--green)")}
-          ${mini("Blocked", fmt(s.blocked), "var(--red)")}
-          ${mini("Rate", pct(rate), "var(--blue)")}
-          ${mini("Cache", fmt(s.cached), "var(--amber)")}
+          ${mini("Queries", fmt(s.queries), "tone-green")}
+          ${mini("Blocked", fmt(s.blocked), "tone-red")}
+          ${mini("Rate", pct(rate), "tone-blue")}
+          ${mini("Cache", fmt(s.cached), "tone-amber")}
         </div>
         <div class="bar-block">
           <div class="bar-row"><span>Blocked Traffic</span><strong>${pct(rate)}</strong></div>
-          <div class="bar"><span style="width:${Math.min(rate, 100)}%;background:${server.color}"></span></div>
+          <progress class="bar-progress" value="${Math.min(rate, 100)}" max="100"></progress>
         </div>
         <canvas class="chart" id="history-${index}" width="600" height="210"></canvas>
         ${server.error ? `<p class="error-text">${escapeHtml(server.error)}</p>` : ""}
@@ -201,14 +201,14 @@ function renderCompare() {
     ["Clients", "clients", fmt]
   ];
   els.compare.innerHTML = `
-    <section class="wide-panel" style="--server-count:${servers.length}">
+    <section class="wide-panel">
       <canvas class="chart" id="compareChart" width="1200" height="260"></canvas>
       <div class="compare-grid">
         <div class="compare-row"><strong>Metric</strong>${servers.map((server) => `<strong>${escapeHtml(server.name)}</strong>`).join("")}</div>
         ${rows.map(([label, key, formatter]) => `
           <div class="compare-row">
             <strong>${label}</strong>
-            ${servers.map((server) => `<span style="color:${server.color}">${escapeHtml(formatter(server.summary[key]))}</span>`).join("")}
+            ${servers.map((server) => `<span>${escapeHtml(formatter(server.summary[key]))}</span>`).join("")}
           </div>
         `).join("")}
       </div>
@@ -230,8 +230,8 @@ function rankSection(title, rows = []) {
   return `<div class="list-section"><span class="label">${escapeHtml(title)}</span>${content}</div>`;
 }
 
-function mini(label, value, color) {
-  return `<div class="mini"><span class="label">${escapeHtml(label)}</span><strong style="color:${color}">${escapeHtml(value)}</strong></div>`;
+function mini(label, value, tone) {
+  return `<div class="mini"><span class="label">${escapeHtml(label)}</span><strong class="${tone}">${escapeHtml(value)}</strong></div>`;
 }
 
 function openSettings() {
@@ -267,7 +267,7 @@ function renderSettings() {
           </select>
         </label>
       </div>
-      <div class="settings-toolbar" style="margin-top:12px;justify-content:flex-end">
+      <div class="settings-toolbar settings-toolbar-end">
         <button class="plain-button" type="button" data-remove="${index}">Remove</button>
       </div>
     </div>

@@ -163,6 +163,13 @@ h1 {
   letter-spacing: 0;
 }
 
+.tone-green { color: var(--green); }
+.tone-red { color: var(--red); }
+.tone-blue { color: var(--blue); }
+.tone-violet { color: var(--violet); }
+.tone-amber { color: var(--amber); }
+.tone-soft { color: var(--soft); }
+
 .tabs {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -281,17 +288,28 @@ h1 {
   font-size: 0.85rem;
 }
 
-.bar {
+.bar-progress {
+  display: block;
+  width: 100%;
   height: 9px;
   margin-top: 7px;
-  overflow: hidden;
-  background: #0c1011;
+  appearance: none;
+  border: 0;
   border-radius: 999px;
 }
 
-.bar span {
-  display: block;
-  height: 100%;
+.bar-progress::-webkit-progress-bar {
+  background: #0c1011;
+  border-radius: inherit;
+}
+
+.bar-progress::-webkit-progress-value {
+  background: var(--green);
+  border-radius: inherit;
+}
+
+.bar-progress::-moz-progress-bar {
+  background: var(--green);
   border-radius: inherit;
 }
 
@@ -355,8 +373,7 @@ h1 {
 }
 
 .compare-row {
-  display: grid;
-  grid-template-columns: 180px repeat(var(--server-count), minmax(110px, 1fr));
+  display: flex;
   gap: 10px;
   align-items: center;
   padding: 10px 12px;
@@ -367,6 +384,15 @@ h1 {
 .compare-row strong {
   color: var(--soft);
   font-size: 0.9rem;
+}
+
+.compare-row > :first-child {
+  flex: 0 0 180px;
+}
+
+.compare-row > :not(:first-child) {
+  flex: 1 1 110px;
+  min-width: 0;
 }
 
 .notice {
@@ -427,6 +453,11 @@ h1 {
   border-radius: 8px;
 }
 
+.settings-toolbar-end {
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -477,5 +508,13 @@ h1 {
   .summary-grid { grid-template-columns: repeat(2, 1fr); }
   .tabs { grid-template-columns: 1fr; }
   .form-grid { grid-template-columns: 1fr; }
-  .compare-row { grid-template-columns: 1fr; }
+  .compare-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .compare-row > :first-child,
+  .compare-row > :not(:first-child) {
+    flex: 0 1 auto;
+  }
 }
