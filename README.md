@@ -14,7 +14,65 @@ The backend proxies Pi-hole API calls so the browser avoids CORS issues. It trie
 
 ![Settings modal showing server CRUD with encrypted stored passwords](docs/screenshots/settings.svg)
 
-## Run
+## Run From The Published Image
+
+The easiest homelab install is to pull the published image instead of cloning this repository.
+
+Create a local `.env` file for secrets and deployment-specific settings:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/octobeau/pidash/main/.env.example -o .env
+```
+
+Then edit `.env` and start the app with one of these options.
+
+### Pull The Image
+
+```bash
+docker pull ghcr.io/octobeau/pidash:latest
+```
+
+Published tags include `latest` for the default branch, branch tags such as `main`, and version tags when a `v*` release tag is pushed.
+
+### Docker Compose
+
+Download the pull-based compose file:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/octobeau/pidash/main/docker-compose.image.yml -o docker-compose.yml
+docker compose up -d
+```
+
+Open `http://localhost:8080` or `https://localhost:8443`.
+
+The compose file uses `ghcr.io/octobeau/pidash:latest` by default. To pin a release or test another build, set `PIDASH_IMAGE` in `.env`:
+
+```dotenv
+PIDASH_IMAGE=ghcr.io/octobeau/pidash:v0.1.0
+```
+
+### Docker Run
+
+```bash
+docker volume create pidash-data
+docker run -d \
+  --name pihole-dashboard \
+  --restart unless-stopped \
+  --env-file .env \
+  -e PORT=8080 \
+  -e HOST=0.0.0.0 \
+  -e ENABLE_HTTPS=true \
+  -e HTTPS_PORT=8443 \
+  -e DATABASE_PATH=/data/pidash.sqlite \
+  -p 8080:8080 \
+  -p 8443:8443 \
+  -v pidash-data:/data \
+  ghcr.io/octobeau/pidash:latest
+```
+
+### Local Build
+
+Use this option only when you want to build from source, such as while contributing or testing local changes.
 
 Create a local `.env` file for secrets and deployment-specific settings:
 
@@ -186,7 +244,7 @@ The seed only runs when the SQLite database has no server records.
 1. Create `.env` from `.env.example`.
 2. Set `CONFIG_ENCRYPTION_KEY` before saving Pi-hole passwords.
 3. Set `DASHBOARD_PASSWORD` or place the app behind a trusted IdP/reverse proxy.
-4. Start the app with `docker compose up --build`.
+4. Start the app with `docker compose up -d`.
 5. Open Settings, add Pi-hole servers, then save.
 
 ### Back Up Server Settings
@@ -205,11 +263,11 @@ Restore by stopping the app, copying the backup into the volume, then starting t
 ### Update the App
 
 ```bash
-git pull
-docker compose up --build -d
+docker compose pull
+docker compose up -d
 ```
 
-The SQLite volume is preserved across container rebuilds.
+The SQLite volume is preserved across container updates.
 
 ### Health Check
 
