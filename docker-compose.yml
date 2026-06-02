@@ -11,16 +11,12 @@ services:
       ENABLE_HTTPS: "true"
       HTTPS_PORT: 8443
       DATABASE_PATH: /data/pidash.sqlite
-      # Required before storing Pi-hole passwords from the Settings UI.
-      # Generate one with: openssl rand -base64 32
-      # CONFIG_ENCRYPTION_KEY: "change-me"
+      CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY:-}
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME:-admin}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      NODE_TLS_REJECT_UNAUTHORIZED: ${NODE_TLS_REJECT_UNAUTHORIZED:-1}
       # Optional: seed an empty database from a JSON config file.
       # PIHOLE_CONFIG: /app/config/piholes.json
-      # Set a strong value to protect the dashboard UI and API with Basic Auth.
-      # DASHBOARD_USERNAME: admin
-      # DASHBOARD_PASSWORD: "change-me"
-      # Set this to 0 only if your Pi-hole API uses a self-signed HTTPS cert.
-      # NODE_TLS_REJECT_UNAUTHORIZED: "0"
     volumes:
       - pidash-data:/data
       # - ./config/piholes.json:/app/config/piholes.json:ro

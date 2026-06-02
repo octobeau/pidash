@@ -6,6 +6,14 @@ The backend proxies Pi-hole API calls so the browser avoids CORS issues. It trie
 
 ## Run
 
+Create a local `.env` file for secrets and deployment-specific settings:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` and start the app:
+
 ```bash
 docker compose up --build
 ```
@@ -18,11 +26,10 @@ The app stores server settings in SQLite at `/data/pidash.sqlite`. `config/pihol
 
 Use the Settings UI to add Pi-hole servers. For Pi-hole v6, use the web/app password. For Pi-hole v5, use the API token. Server records are stored in SQLite, and passwords are encrypted before they are written.
 
-Set `CONFIG_ENCRYPTION_KEY` before saving Pi-hole passwords:
+Set `CONFIG_ENCRYPTION_KEY` in `.env` before saving Pi-hole passwords:
 
-```yaml
-environment:
-  CONFIG_ENCRYPTION_KEY: "use-a-long-random-secret"
+```dotenv
+CONFIG_ENCRYPTION_KEY=use-a-long-random-secret
 ```
 
 Generate a good key with:
@@ -37,15 +44,37 @@ The browser never receives stored passwords. It only receives `hasPassword: true
 
 Set a strong `DASHBOARD_PASSWORD` to protect both the UI and `/api/*` endpoints with Basic Auth:
 
-```yaml
-environment:
-  DASHBOARD_USERNAME: admin
-  DASHBOARD_PASSWORD: "use-a-long-random-password"
+```dotenv
+DASHBOARD_USERNAME=admin
+DASHBOARD_PASSWORD=use-a-long-random-password
 ```
 
 Use the same scheme that the Pi-hole API accepts from this container. For many LAN installs, `http://192.168.x.x` works even when the admin UI is usually opened as `https://192.168.x.x/admin/`.
 
-If you use HTTPS with a self-signed Pi-hole certificate, Node will reject it unless you uncomment `NODE_TLS_REJECT_UNAUTHORIZED: "0"` in `docker-compose.yml`.
+If you use HTTPS with a self-signed Pi-hole certificate, Node will reject it unless you set this in `.env`:
+
+```dotenv
+NODE_TLS_REJECT_UNAUTHORIZED=0
+```
+
+Leave it unset for the safer default when Pi-hole uses trusted certificates or HTTP.
+
+## Example `.env`
+
+```dotenv
+# Required before storing Pi-hole passwords in SQLite.
+# Generate with: openssl rand -base64 32
+CONFIG_ENCRYPTION_KEY=
+
+# Optional but recommended. Enables Basic Auth for the dashboard UI and API.
+DASHBOARD_USERNAME=admin
+DASHBOARD_PASSWORD=
+
+# Optional. Set to 0 only when polling Pi-hole HTTPS endpoints with self-signed certs.
+NODE_TLS_REJECT_UNAUTHORIZED=1
+```
+
+Keep `.env` private. It is ignored by Git.
 
 ## Dashboard HTTPS
 
