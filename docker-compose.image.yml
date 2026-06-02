@@ -1,0 +1,26 @@
+services:
+  pihole-dashboard:
+    image: ${PIDASH_IMAGE:-ghcr.io/octobeau/pidash:latest}
+    container_name: pihole-dashboard
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+    environment:
+      PORT: 8080
+      HOST: 0.0.0.0
+      ENABLE_HTTPS: "true"
+      HTTPS_PORT: 8443
+      DATABASE_PATH: /data/pidash.sqlite
+      CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY:-}
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME:-admin}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      NODE_TLS_REJECT_UNAUTHORIZED: ${NODE_TLS_REJECT_UNAUTHORIZED:-1}
+      # Optional: seed an empty database from a JSON config file.
+      # PIHOLE_CONFIG: /app/config/piholes.json
+    volumes:
+      - pidash-data:/data
+      # - ./config/piholes.json:/app/config/piholes.json:ro
+    restart: unless-stopped
+
+volumes:
+  pidash-data:
