@@ -4,6 +4,16 @@ A small Dockerized dashboard for multiple Pi-hole servers. It shows aggregate me
 
 The backend proxies Pi-hole API calls so the browser avoids CORS issues. It tries the Pi-hole v6 REST API first, then falls back to the v5 `admin/api.php` API when `version` is set to `auto`.
 
+## Screenshots
+
+### Overview
+
+![Dashboard overview showing aggregate metrics and three Pi-hole server cards](docs/screenshots/overview.svg)
+
+### Server Settings
+
+![Settings modal showing server CRUD with encrypted stored passwords](docs/screenshots/settings.svg)
+
 ## Run
 
 Create a local `.env` file for secrets and deployment-specific settings:
@@ -117,3 +127,56 @@ volumes:
 ```
 
 The seed only runs when the SQLite database has no server records.
+
+## Quality of Life
+
+### First Run Checklist
+
+1. Create `.env` from `.env.example`.
+2. Set `CONFIG_ENCRYPTION_KEY` before saving Pi-hole passwords.
+3. Set `DASHBOARD_PASSWORD` or place the app behind a trusted IdP/reverse proxy.
+4. Start the app with `docker compose up --build`.
+5. Open Settings, add Pi-hole servers, then save.
+
+### Back Up Server Settings
+
+Server records are stored in the Docker volume at `/data/pidash.sqlite`. To back up the named Compose volume:
+
+```bash
+docker run --rm \
+  -v pidash_pidash-data:/data:ro \
+  -v "$PWD":/backup \
+  alpine sh -c 'cp /data/pidash.sqlite /backup/pidash.sqlite.backup'
+```
+
+Restore by stopping the app, copying the backup into the volume, then starting the app again.
+
+### Update the App
+
+```bash
+git pull
+docker compose up --build -d
+```
+
+The SQLite volume is preserved across container rebuilds.
+
+### Health Check
+
+Use `/healthz` for uptime checks:
+
+```bash
+curl http://localhost:8080/healthz
+```
+
+It returns:
+
+```json
+{"ok":true}
+```
+
+### Troubleshooting
+
+- If Settings refuses to save a password, confirm `CONFIG_ENCRYPTION_KEY` is set and the container was recreated after editing `.env`.
+- If a Pi-hole shows offline over HTTPS with a self-signed certificate, set `NODE_TLS_REJECT_UNAUTHORIZED=0` in `.env` or use a trusted certificate.
+- If existing encrypted passwords stop working, verify `CONFIG_ENCRYPTION_KEY` has not changed. Saved passwords cannot be decrypted with a different key.
+- If the dashboard loads but has no servers, open Settings and add servers, or seed a fresh database with `PIHOLE_CONFIG`.
