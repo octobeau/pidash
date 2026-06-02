@@ -1,0 +1,14 @@
+{
+  "name": "pihole-multi-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dockerized multi-server Pi-hole dashboard",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}

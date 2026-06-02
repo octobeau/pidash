@@ -1,0 +1,30 @@
+services:
+  pihole-dashboard:
+    build: .
+    container_name: pihole-dashboard
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+    environment:
+      PORT: 8080
+      HOST: 0.0.0.0
+      ENABLE_HTTPS: "true"
+      HTTPS_PORT: 8443
+      DATABASE_PATH: /data/pidash.sqlite
+      # Required before storing Pi-hole passwords from the Settings UI.
+      # Generate one with: openssl rand -base64 32
+      # CONFIG_ENCRYPTION_KEY: "change-me"
+      # Optional: seed an empty database from a JSON config file.
+      # PIHOLE_CONFIG: /app/config/piholes.json
+      # Set a strong value to protect the dashboard UI and API with Basic Auth.
+      # DASHBOARD_USERNAME: admin
+      # DASHBOARD_PASSWORD: "change-me"
+      # Set this to 0 only if your Pi-hole API uses a self-signed HTTPS cert.
+      # NODE_TLS_REJECT_UNAUTHORIZED: "0"
+    volumes:
+      - pidash-data:/data
+      # - ./config/piholes.json:/app/config/piholes.json:ro
+    restart: unless-stopped
+
+volumes:
+  pidash-data:
