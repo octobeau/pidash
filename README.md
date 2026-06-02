@@ -42,11 +42,54 @@ The browser never receives stored passwords. It only receives `hasPassword: true
 
 ## Dashboard Authentication
 
-Set a strong `DASHBOARD_PASSWORD` to protect both the UI and `/api/*` endpoints with Basic Auth:
+Authentication is controlled by `AUTH_MODE` in `.env`.
+
+### Basic Auth
+
+Basic Auth is the default mode. Set a strong `DASHBOARD_PASSWORD` to protect both the UI and `/api/*` endpoints:
 
 ```dotenv
+AUTH_MODE=basic
 DASHBOARD_USERNAME=admin
 DASHBOARD_PASSWORD=use-a-long-random-password
+```
+
+If `AUTH_MODE=basic` and `DASHBOARD_PASSWORD` is empty, the dashboard will reject requests until you configure a password. Set `AUTH_MODE=none` only for a trusted, isolated local deployment.
+
+### Reverse Proxy / IdP Auth
+
+Use `AUTH_MODE=proxy` when an identity-aware reverse proxy handles authentication in front of the app. This works with Authentik, Authelia, Keycloak, and similar systems when they inject trusted identity headers.
+
+```dotenv
+AUTH_MODE=proxy
+AUTH_PROXY_USER_HEADER=x-forwarded-user
+AUTH_PROXY_EMAIL_HEADER=x-forwarded-email
+AUTH_PROXY_NAME_HEADER=x-forwarded-name
+```
+
+Only use proxy mode when the dashboard is not directly reachable by users. The reverse proxy must strip incoming client-supplied identity headers before adding its own.
+
+Common header examples:
+
+```dotenv
+# Authentik forward auth commonly uses these:
+AUTH_PROXY_USER_HEADER=x-authentik-username
+AUTH_PROXY_EMAIL_HEADER=x-authentik-email
+AUTH_PROXY_NAME_HEADER=x-authentik-name
+```
+
+```dotenv
+# Authelia commonly uses Remote-User style headers:
+AUTH_PROXY_USER_HEADER=remote-user
+AUTH_PROXY_EMAIL_HEADER=remote-email
+AUTH_PROXY_NAME_HEADER=remote-name
+```
+
+```dotenv
+# Keycloak is commonly placed behind oauth2-proxy or a gateway:
+AUTH_PROXY_USER_HEADER=x-forwarded-user
+AUTH_PROXY_EMAIL_HEADER=x-forwarded-email
+AUTH_PROXY_NAME_HEADER=x-forwarded-preferred-username
 ```
 
 Use the same scheme that the Pi-hole API accepts from this container. For many LAN installs, `http://192.168.x.x` works even when the admin UI is usually opened as `https://192.168.x.x/admin/`.
@@ -67,8 +110,16 @@ Leave it unset for the safer default when Pi-hole uses trusted certificates or H
 CONFIG_ENCRYPTION_KEY=
 
 # Optional but recommended. Enables Basic Auth for the dashboard UI and API.
+AUTH_MODE=basic
 DASHBOARD_USERNAME=admin
 DASHBOARD_PASSWORD=
+
+# Optional. Use when Authentik, Authelia, Keycloak, or another IdP protects
+# the app through a reverse proxy that injects trusted identity headers.
+# AUTH_MODE=proxy
+# AUTH_PROXY_USER_HEADER=x-forwarded-user
+# AUTH_PROXY_EMAIL_HEADER=x-forwarded-email
+# AUTH_PROXY_NAME_HEADER=x-forwarded-name
 
 # Optional. Set to 0 only when polling Pi-hole HTTPS endpoints with self-signed certs.
 NODE_TLS_REJECT_UNAUTHORIZED=1
