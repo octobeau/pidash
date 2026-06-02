@@ -18,8 +18,12 @@ const tlsKeyFile = process.env.TLS_KEY_FILE || path.join(__dirname, "certs", "se
 const configPath = process.env.PIHOLE_CONFIG || path.join(__dirname, "config", "piholes.json");
 const databasePath = process.env.DATABASE_PATH || path.join(__dirname, "data", "pidash.sqlite");
 const timeoutMs = Number(process.env.PIHOLE_TIMEOUT_MS || 7000);
+const authMode = String(process.env.AUTH_MODE || "basic").toLowerCase();
 const dashboardUser = process.env.DASHBOARD_USERNAME || "admin";
 const dashboardPassword = process.env.DASHBOARD_PASSWORD || "";
+const authProxyUserHeader = normalizeHeaderName(process.env.AUTH_PROXY_USER_HEADER || "x-forwarded-user");
+const authProxyEmailHeader = normalizeHeaderName(process.env.AUTH_PROXY_EMAIL_HEADER || "x-forwarded-email");
+const authProxyNameHeader = normalizeHeaderName(process.env.AUTH_PROXY_NAME_HEADER || "x-forwarded-name");
 const encryptionSecret = process.env.CONFIG_ENCRYPTION_KEY || "";
 
 const colors = ["#39d98a", "#4c9ffe", "#f97373", "#f5b642", "#a78bfa", "#22d3ee"];
@@ -47,8 +51,13 @@ const requestHandler = async (req, res) => {
       return sendUnauthorized(res);
     }
 
+    if (req.method === "GET" && url.pathname === "/api/me") {
+      return sendJson(res, currentUser(req));
+    }
+
     if (req.method === "GET" && url.pathname === "/api/config") {
       return sendJson(res, {
+        authMode,
         encryptionConfigured: Boolean(encryptionSecret),
         servers: listServerConfigs()
       });
@@ -606,17 +615,22 @@ function sendJson(res, data, status = 200) {
 }
 
 function sendUnauthorized(res) {
-  res.writeHead(401, {
+  const headers = {
     ...securityHeaders(),
     "Content-Type": "text/plain; charset=utf-8",
-    "Cache-Control": "no-store",
-    "WWW-Authenticate": 'Basic realm="Pi-hole Dashboard"'
-  });
+    "Cache-Control": "no-store"
+  };
+  if (authMode === "basic") headers["WWW-Authenticate"] = 'Basic realm="Pi-hole Dashboard"';
+  res.writeHead(401, headers);
   res.end("Authentication required");
 }
 
 function isAuthorized(req) {
-  if (!dashboardPassword) return true;
+  if (authMode === "none") return true;
+  if (authMode === "proxy") return isProxyAuthorized(req);
+  if (authMode !== "basic") return false;
+  if (!dashboardPassword) return false;
+
   const header = req.headers.authorization || "";
   if (!header.startsWith("Basic ")) return false;
 
@@ -630,6 +644,37 @@ function isAuthorized(req) {
   } catch {
     return false;
   }
+}
+
+function isProxyAuthorized(req) {
+  const username = headerValue(req, authProxyUserHeader);
+  return Boolean(username);
+}
+
+function currentUser(req) {
+  if (authMode === "proxy") {
+    return {
+      mode: authMode,
+      username: headerValue(req, authProxyUserHeader),
+      email: headerValue(req, authProxyEmailHeader),
+      name: headerValue(req, authProxyNameHeader)
+    };
+  }
+
+  return {
+    mode: authMode,
+    username: authMode === "basic" ? dashboardUser : ""
+  };
+}
+
+function headerValue(req, headerName) {
+  const value = req.headers[headerName];
+  if (Array.isArray(value)) return value[0] || "";
+  return value || "";
+}
+
+function normalizeHeaderName(name) {
+  return String(name).trim().toLowerCase();
 }
 
 function safeEqual(actual, expected) {
