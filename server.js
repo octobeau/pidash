@@ -4,6 +4,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEq
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
+import { networkInterfaces } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -109,7 +110,7 @@ const requestHandler = async (req, res) => {
 };
 
 createServer(requestHandler).listen(port, host, () => {
-  console.log(`Pi-hole dashboard listening on http://${host}:${port}`);
+  logListeningUrls("http", port, host);
 });
 
 if (httpsEnabled) {
@@ -118,8 +119,38 @@ if (httpsEnabled) {
     key: await readFile(tlsKeyFile)
   };
   createHttpsServer(tls, requestHandler).listen(httpsPort, host, () => {
-    console.log(`Pi-hole dashboard listening on https://${host}:${httpsPort}`);
+    logListeningUrls("https", httpsPort, host);
   });
+}
+
+function logListeningUrls(protocol, listenPort, listenHost) {
+  const urls = getListeningUrls(protocol, listenPort, listenHost);
+  console.log("Pi-hole dashboard listening on " + urls.join(", "));
+}
+
+function getListeningUrls(protocol, listenPort, listenHost) {
+  const hosts = isWildcardHost(listenHost) ? getLocalIpAddresses() : [listenHost];
+  const uniqueHosts = hosts.length ? hosts : ["localhost"];
+  return uniqueHosts.map((urlHost) => protocol + "://" + formatUrlHost(urlHost) + ":" + listenPort);
+}
+
+function isWildcardHost(listenHost) {
+  return listenHost === "0.0.0.0" || listenHost === "::" || listenHost === "";
+}
+
+function getLocalIpAddresses() {
+  const addresses = [];
+  for (const interfaces of Object.values(networkInterfaces())) {
+    for (const details of interfaces || []) {
+      if (details.internal || details.family !== "IPv4") continue;
+      addresses.push(details.address);
+    }
+  }
+  return [...new Set(addresses)];
+}
+
+function formatUrlHost(urlHost) {
+  return urlHost.includes(":") && !urlHost.startsWith("[") ? "[" + urlHost + "]" : urlHost;
 }
 
 function openDatabase() {
