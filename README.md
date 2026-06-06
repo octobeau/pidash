@@ -45,6 +45,14 @@ docker compose up -d
 
 Open `http://localhost:8080` or `https://localhost:8443`.
 
+To make container startup logs show a LAN address or DNS name instead of an internal Docker bridge address, set `DASHBOARD_PUBLIC_HOST` in `.env`:
+
+```dotenv
+DASHBOARD_PUBLIC_HOST=192.168.1.50
+# or
+DASHBOARD_PUBLIC_HOST=pidash.local
+```
+
 The compose file uses `ghcr.io/octobeau/pidash:latest` by default. To pin a release or test another build, set `PIDASH_IMAGE` in `.env`:
 
 ```dotenv
@@ -181,6 +189,9 @@ CONFIG_ENCRYPTION_KEY=
 AUTH_MODE=basic
 DASHBOARD_USERNAME=admin
 DASHBOARD_PASSWORD=
+
+# Optional. Hostname or LAN IP advertised in Docker startup logs.
+DASHBOARD_PUBLIC_HOST=
 
 # Optional. Use when Authentik, Authelia, Keycloak, or another IdP protects
 # the app through a reverse proxy that injects trusted identity headers.

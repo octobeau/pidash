@@ -8,6 +8,7 @@ services:
     environment:
       PORT: 8080
       HOST: 0.0.0.0
+      DASHBOARD_PUBLIC_HOST: ${DASHBOARD_PUBLIC_HOST:-}
       ENABLE_HTTPS: "true"
       HTTPS_PORT: 8443
       DATABASE_PATH: /data/pidash.sqlite

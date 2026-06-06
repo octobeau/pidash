@@ -26,6 +26,7 @@ const authProxyUserHeader = normalizeHeaderName(process.env.AUTH_PROXY_USER_HEAD
 const authProxyEmailHeader = normalizeHeaderName(process.env.AUTH_PROXY_EMAIL_HEADER || "x-forwarded-email");
 const authProxyNameHeader = normalizeHeaderName(process.env.AUTH_PROXY_NAME_HEADER || "x-forwarded-name");
 const encryptionSecret = process.env.CONFIG_ENCRYPTION_KEY || "";
+const advertisedHosts = String(process.env.DASHBOARD_PUBLIC_HOST || process.env.PUBLIC_HOST || "");
 
 const colors = ["#39d98a", "#4c9ffe", "#f97373", "#f5b642", "#a78bfa", "#22d3ee"];
 const sessionCache = new Map();
@@ -129,9 +130,40 @@ function logListeningUrls(protocol, listenPort, listenHost) {
 }
 
 function getListeningUrls(protocol, listenPort, listenHost) {
-  const hosts = isWildcardHost(listenHost) ? getLocalIpAddresses() : [listenHost];
-  const uniqueHosts = hosts.length ? hosts : ["localhost"];
-  return uniqueHosts.map((urlHost) => protocol + "://" + formatUrlHost(urlHost) + ":" + listenPort);
+  const configuredHosts = parseAdvertisedHosts(advertisedHosts);
+  const detectedHosts = isWildcardHost(listenHost) ? getLocalIpAddresses() : [listenHost];
+  const hosts = configuredHosts.length ? configuredHosts : detectedHosts.filter((address) => !isContainerOnlyAddress(address));
+  const uniqueHosts = hosts.length ? [...new Set(hosts)] : ["localhost"];
+  return uniqueHosts.map((urlHost) => formatListeningUrl(protocol, urlHost, listenPort));
+}
+
+function parseAdvertisedHosts(value) {
+  return String(value || "")
+    .split(/[\s,]+/)
+    .map(normalizeAdvertisedHost)
+    .filter(Boolean);
+}
+
+function normalizeAdvertisedHost(value) {
+  const source = String(value || "").trim();
+  if (!source) return "";
+
+  try {
+    return new URL(source.includes("://") ? source : "http://" + source).host;
+  } catch {
+    return source.replace(/^https?:\/\//i, "").split("/")[0];
+  }
+}
+
+function formatListeningUrl(protocol, urlHost, listenPort) {
+  const hostWithPort = hostHasPort(urlHost) ? urlHost : formatUrlHost(urlHost) + ":" + listenPort;
+  return protocol + "://" + hostWithPort;
+}
+
+function hostHasPort(urlHost) {
+  if (urlHost.startsWith("[")) return urlHost.includes("]:");
+  const parts = urlHost.split(":");
+  return parts.length === 2 && /^\d+$/.test(parts[1]);
 }
 
 function isWildcardHost(listenHost) {
@@ -147,6 +179,14 @@ function getLocalIpAddresses() {
     }
   }
   return [...new Set(addresses)];
+}
+
+function isContainerOnlyAddress(address) {
+  return isRunningInContainer() && (/^10\./.test(address) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(address));
+}
+
+function isRunningInContainer() {
+  return existsSync("/.dockerenv") || Boolean(process.env.KUBERNETES_SERVICE_HOST);
 }
 
 function formatUrlHost(urlHost) {
