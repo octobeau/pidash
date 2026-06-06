@@ -30,6 +30,7 @@ const advertisedHosts = String(process.env.DASHBOARD_PUBLIC_HOST || process.env.
 
 const colors = ["#39d98a", "#4c9ffe", "#f97373", "#f5b642", "#a78bfa", "#22d3ee"];
 const sessionCache = new Map();
+let loggedDockerBridgeHostHint = false;
 const db = openDatabase();
 
 const mimeTypes = {
@@ -125,16 +126,25 @@ if (httpsEnabled) {
 }
 
 function logListeningUrls(protocol, listenPort, listenHost) {
-  const urls = getListeningUrls(protocol, listenPort, listenHost);
+  const { urls, hiddenContainerHosts, usedFallbackHost } = getListeningUrls(protocol, listenPort, listenHost);
   console.log("Pi-hole dashboard listening on " + urls.join(", "));
+  if (usedFallbackHost && hiddenContainerHosts.length && !loggedDockerBridgeHostHint) {
+    loggedDockerBridgeHostHint = true;
+    console.log("Docker bridge address " + hiddenContainerHosts.join(", ") + " was hidden because it is usually not reachable from your LAN. Set DASHBOARD_PUBLIC_HOST to your host LAN IP or DNS name to advertise it in startup logs.");
+  }
 }
 
 function getListeningUrls(protocol, listenPort, listenHost) {
   const configuredHosts = parseAdvertisedHosts(advertisedHosts);
   const detectedHosts = isWildcardHost(listenHost) ? getLocalIpAddresses() : [listenHost];
+  const hiddenContainerHosts = configuredHosts.length ? [] : detectedHosts.filter(isContainerOnlyAddress);
   const hosts = configuredHosts.length ? configuredHosts : detectedHosts.filter((address) => !isContainerOnlyAddress(address));
   const uniqueHosts = hosts.length ? [...new Set(hosts)] : ["localhost"];
-  return uniqueHosts.map((urlHost) => formatListeningUrl(protocol, urlHost, listenPort));
+  return {
+    hiddenContainerHosts,
+    urls: uniqueHosts.map((urlHost) => formatListeningUrl(protocol, urlHost, listenPort)),
+    usedFallbackHost: hosts.length === 0
+  };
 }
 
 function parseAdvertisedHosts(value) {
