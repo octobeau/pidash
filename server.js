@@ -182,7 +182,7 @@ function getLocalIpAddresses() {
 }
 
 function isContainerOnlyAddress(address) {
-  return isRunningInContainer() && (/^10\./.test(address) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(address));
+  return isRunningInContainer() && /^172\.(1[6-9]|2\d|3[0-1])\./.test(address);
 }
 
 function isRunningInContainer() {
