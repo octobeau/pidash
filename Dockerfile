@@ -14,4 +14,4 @@ RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 8080 8443
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD ["node", "server.js"]
+CMD ["node", "--disable-warning=ExperimentalWarning", "server.js"]
