@@ -1,0 +1,11 @@
+{
+  "servers": [
+    {
+      "name": "Test Pi-hole",
+      "url": "http://127.0.0.1/admin/api.php",
+      "password": "",
+      "version": "auto",
+      "enabled": true
+    }
+  ]
+}

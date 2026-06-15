@@ -42,7 +42,7 @@ const mimeTypes = {
   ".ico": "image/x-icon"
 };
 
-const requestHandler = async (req, res) => {
+export const requestHandler = async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
@@ -111,17 +111,27 @@ const requestHandler = async (req, res) => {
   }
 };
 
-createServer(requestHandler).listen(port, host, () => {
-  logListeningUrls("http", port, host);
-});
+async function startServer() {
+  createServer(requestHandler).listen(port, host, () => {
+    logListeningUrls("http", port, host);
+  });
 
-if (httpsEnabled) {
-  const tls = {
-    cert: await readFile(tlsCertFile),
-    key: await readFile(tlsKeyFile)
-  };
-  createHttpsServer(tls, requestHandler).listen(httpsPort, host, () => {
-    logListeningUrls("https", httpsPort, host);
+  if (httpsEnabled) {
+    const tls = {
+      cert: await readFile(tlsCertFile),
+      key: await readFile(tlsKeyFile)
+    };
+    createHttpsServer(tls, requestHandler).listen(httpsPort, host, () => {
+      logListeningUrls("https", httpsPort, host);
+    });
+  }
+}
+
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === fileURLToPath(new URL(`file://${process.argv[1]}`));
+if (isMain) {
+  startServer().catch((err) => {
+    console.error("Failed to start server:", err);
+    process.exit(1);
   });
 }
 
@@ -241,11 +251,11 @@ function readFileSyncText(filePath) {
   return readFileSync(filePath, "utf8");
 }
 
-function loadServers() {
+export function loadServers() {
   return db.prepare("SELECT * FROM servers WHERE enabled = 1 ORDER BY id").all().map(rowToServer);
 }
 
-function normalizeServer(input, index = 0) {
+export function normalizeServer(input, index = 0) {
   if (!input) return null;
   const source = input.url || input.baseUrl || input.host;
   if (!source) return null;
@@ -270,18 +280,18 @@ function normalizeServer(input, index = 0) {
   };
 }
 
-function listServerConfigs() {
+export function listServerConfigs() {
   return db.prepare("SELECT * FROM servers ORDER BY id").all().map(redactServerRow);
 }
 
-function createServerConfig(input) {
+export function createServerConfig(input) {
   const server = normalizeServer(input);
   if (!server) throw new Error("Server URL is required");
   const id = insertServer(db, server);
   return redactServerRow(db.prepare("SELECT * FROM servers WHERE id = ?").get(id));
 }
 
-function updateServerConfig(id, input) {
+export function updateServerConfig(id, input) {
   const existing = db.prepare("SELECT * FROM servers WHERE id = ?").get(id);
   if (!existing) throw new Error("Server not found");
 
@@ -304,7 +314,7 @@ function updateServerConfig(id, input) {
   return redactServerRow(db.prepare("SELECT * FROM servers WHERE id = ?").get(id));
 }
 
-function deleteServerConfig(id) {
+export function deleteServerConfig(id) {
   db.prepare("DELETE FROM servers WHERE id = ?").run(id);
 }
 
@@ -346,7 +356,7 @@ function redactServerRow(row) {
   };
 }
 
-function encryptPassword(password) {
+export function encryptPassword(password) {
   if (!password) return "";
   const key = encryptionKey();
   const iv = randomBytes(12);
@@ -356,7 +366,7 @@ function encryptPassword(password) {
   return `v1:${iv.toString("base64url")}:${tag.toString("base64url")}:${encrypted.toString("base64url")}`;
 }
 
-function decryptPassword(ciphertext) {
+export function decryptPassword(ciphertext) {
   if (!ciphertext) return "";
   const [version, iv, tag, encrypted] = String(ciphertext).split(":");
   if (version !== "v1" || !iv || !tag || !encrypted) throw new Error("Unsupported encrypted password format");
@@ -379,7 +389,7 @@ function encryptionKey() {
   return createHash("sha256").update(encryptionSecret).digest();
 }
 
-async function collectSnapshot(rawServers) {
+export async function collectSnapshot(rawServers) {
   const servers = rawServers.map(normalizeServer).filter(Boolean);
   const results = await Promise.all(servers.map((server) => collectServer(server)));
   return {
@@ -389,7 +399,7 @@ async function collectSnapshot(rawServers) {
   };
 }
 
-async function collectServer(server) {
+export async function collectServer(server) {
   const started = Date.now();
   try {
     const data = server.version === "5"
@@ -448,7 +458,7 @@ async function fetchAuto(server) {
   }
 }
 
-async function fetchV6(server) {
+export async function fetchV6(server) {
   const headers = await v6Headers(server);
   const [summaryRaw, queryTypesRaw, topDomainsRaw, topBlockedRaw, topClientsRaw, upstreamsRaw, historyRaw, blockingRaw] = await Promise.all([
     getJson(`${server.url}/api/stats/summary`, { headers }),
@@ -493,7 +503,7 @@ async function v6Headers(server) {
   return { "X-FTL-SID": sid };
 }
 
-async function fetchV5(server) {
+export async function fetchV5(server) {
   const auth = server.password ? `&auth=${encodeURIComponent(server.password)}` : "";
   const api = `${server.url}/admin/api.php`;
   const [summaryRaw, queryTypesRaw, topItemsRaw, topClientsRaw, overtimeRaw, forwardedRaw] = await Promise.all([
@@ -517,7 +527,7 @@ async function fetchV5(server) {
   };
 }
 
-async function getJson(url, options = {}, optional = false) {
+export async function getJson(url, options = {}, optional = false) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -695,7 +705,7 @@ function sendJson(res, data, status = 200) {
   res.end(JSON.stringify(data));
 }
 
-function sendUnauthorized(res) {
+export function sendUnauthorized(res) {
   const headers = {
     ...securityHeaders(),
     "Content-Type": "text/plain; charset=utf-8",
@@ -706,7 +716,7 @@ function sendUnauthorized(res) {
   res.end("Authentication required");
 }
 
-function isAuthorized(req) {
+export function isAuthorized(req) {
   if (authMode === "none") return true;
   if (authMode === "proxy") return isProxyAuthorized(req);
   if (authMode !== "basic") return false;
@@ -732,7 +742,7 @@ function isProxyAuthorized(req) {
   return Boolean(username);
 }
 
-function currentUser(req) {
+export function currentUser(req) {
   if (authMode === "proxy") {
     return {
       mode: authMode,
