@@ -141,9 +141,30 @@ AUTH_MODE=proxy
 AUTH_PROXY_USER_HEADER=x-forwarded-user
 AUTH_PROXY_EMAIL_HEADER=x-forwarded-email
 AUTH_PROXY_NAME_HEADER=x-forwarded-name
+TRUSTED_PROXIES=127.0.0.1,::1
 ```
 
 Only use proxy mode when the dashboard is not directly reachable by users. The reverse proxy must strip incoming client-supplied identity headers before adding its own.
+
+`TRUSTED_PROXIES` controls which remote addresses are allowed to provide identity headers. Plain IP entries are exact matches. Use IPv4 CIDR ranges such as `172.18.0.0/16` for Docker proxy networks, or explicit wildcard prefixes such as `192.168.*` when a prefix is intentional.
+
+For Nginx Proxy Manager, keep `AUTH_MODE=basic` unless you add an authentication layer that injects trusted user headers. If Nginx Proxy Manager is only providing TLS, leave Pidash Basic Auth enabled and rate-limit at the proxy if the service is reachable outside the LAN.
+
+For Traefik forward-auth or middleware setups, set `TRUSTED_PROXIES` to the Traefik container IP, Docker network CIDR, or an explicit wildcard prefix for that network. Do not expose the Pidash container port directly when using proxy auth.
+
+Supported proxy patterns:
+
+- **Nginx Proxy Manager as TLS proxy only:** keep `AUTH_MODE=basic`, set a strong `DASHBOARD_PASSWORD`, proxy to Pidash over HTTP or HTTPS, and do not expose the Pidash Docker ports directly outside the proxy path.
+- **Nginx Proxy Manager plus external IdP:** use `AUTH_MODE=proxy` only if the IdP/proxy layer injects a stable user header and strips any incoming client-supplied identity headers first.
+- **Traefik ForwardAuth:** use `AUTH_MODE=proxy`, configure the auth middleware to pass identity headers with `authResponseHeaders`, set `AUTH_PROXY_*_HEADER` to those header names, and set `TRUSTED_PROXIES` to the Traefik container IP or Docker network CIDR.
+- **Authentik, Authelia, Keycloak, oauth2-proxy:** supported when they sit in front of Pidash and inject trusted headers through Nginx Proxy Manager, Traefik, or another gateway.
+
+Required proxy-mode rules:
+
+- Pidash must not be directly reachable except from the trusted proxy.
+- The proxy must strip incoming client-supplied identity headers before setting its own.
+- `TRUSTED_PROXIES` must match the actual remote address Pidash sees for the proxy.
+- Keep `CSRF_SECRET` unset unless your proxy injects `X-CSRF-Token` or `X-XSRF-Token` on browser API requests. With `CSRF_SECRET` unset, Pidash uses same-origin `Origin` / `Referer` validation.
 
 Common header examples:
 
@@ -199,6 +220,9 @@ DASHBOARD_PUBLIC_HOST=
 # AUTH_PROXY_USER_HEADER=x-forwarded-user
 # AUTH_PROXY_EMAIL_HEADER=x-forwarded-email
 # AUTH_PROXY_NAME_HEADER=x-forwarded-name
+# TRUSTED_PROXIES=127.0.0.1,::1
+# Only set CSRF_SECRET when a proxy injects the matching token header.
+# CSRF_SECRET=
 
 # Optional. Set to 0 only when polling Pi-hole HTTPS endpoints with self-signed certs.
 NODE_TLS_REJECT_UNAUTHORIZED=1

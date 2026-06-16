@@ -4,6 +4,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEq
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
+import { isIP } from "node:net";
 import { networkInterfaces } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,9 +39,9 @@ if (encryptionKeyFile) {
   }
 }
 
-// Proxy trust configuration: comma-separated list of IPs or prefixes
+// Proxy trust configuration: comma-separated list of exact IPs, IPv4 CIDRs, or explicit wildcard prefixes.
 const trustedProxiesRaw = String(process.env.TRUSTED_PROXIES || "127.0.0.1,::1");
-const trustedProxies = trustedProxiesRaw.split(/[,\s]+/).filter(Boolean);
+const trustedProxyRules = parseTrustedProxyRules(trustedProxiesRaw);
 
 // CSRF protection secret (optional). If set, clients must send X-CSRF-Token header.
 const csrfSecret = process.env.CSRF_SECRET || "";
@@ -67,7 +68,11 @@ export const requestHandler = async (req, res) => {
     // CSRF protection for state-changing API requests
     if (req.method !== "GET" && req.method !== "HEAD" && url.pathname.startsWith("/api/")) {
       if (!validateCsrf(req)) {
-        res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+        res.writeHead(403, {
+          ...securityHeaders(),
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store"
+        });
         res.end("CSRF validation failed");
         return;
       }
@@ -129,7 +134,11 @@ export const requestHandler = async (req, res) => {
     else res.end();
   } catch (error) {
     if (error?.code === "ENOENT") {
-      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.writeHead(404, {
+        ...securityHeaders(),
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store"
+      });
       res.end("Not found");
       return;
     }
@@ -288,6 +297,10 @@ export function normalizeServer(input, index = 0) {
   if (!source) return null;
 
   const parsed = new URL(source.includes("://") ? source : `http://${source}`);
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error("Server URL must use http or https");
+  }
+
   parsed.pathname = parsed.pathname
     .replace(/\/admin\/api\.php$/i, "")
     .replace(/\/admin\/?$/i, "")
@@ -776,12 +789,46 @@ export function isRequestFromTrustedProxy(req) {
     const remote = String(req.socket?.remoteAddress || req.connection?.remoteAddress || "");
     // Normalize IPv4-mapped IPv6 addresses like ::ffff:127.0.0.1
     const normalized = remote.replace(/^::ffff:/, "");
-    if (trustedProxies.includes(normalized)) return true;
-    // allow prefix match (e.g., 172.17.)
-    return trustedProxies.some((p) => normalized.startsWith(p));
+    return trustedProxyRules.some((rule) => matchesTrustedProxyRule(normalized, rule));
   } catch {
     return false;
   }
+}
+
+export function parseTrustedProxyRules(value) {
+  return String(value || "")
+    .split(/[,\s]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      if (entry.endsWith("*")) return { type: "prefix", value: entry.slice(0, -1) };
+      if (entry.includes("/")) {
+        const [address, bits] = entry.split("/");
+        const prefixLength = Number(bits);
+        if (isIP(address) === 4 && Number.isInteger(prefixLength) && prefixLength >= 0 && prefixLength <= 32) {
+          return { type: "cidr4", address, prefixLength };
+        }
+      }
+      return { type: "exact", value: entry };
+    });
+}
+
+export function matchesTrustedProxyRule(address, rule) {
+  if (!address || !rule) return false;
+  if (rule.type === "exact") return address === rule.value;
+  if (rule.type === "prefix") return Boolean(rule.value) && address.startsWith(rule.value);
+  if (rule.type === "cidr4") return isIpv4InCidr(address, rule.address, rule.prefixLength);
+  return false;
+}
+
+function isIpv4InCidr(address, network, prefixLength) {
+  if (isIP(address) !== 4 || isIP(network) !== 4) return false;
+  const mask = prefixLength === 0 ? 0 : (0xffffffff << (32 - prefixLength)) >>> 0;
+  return (ipv4ToNumber(address) & mask) === (ipv4ToNumber(network) & mask);
+}
+
+function ipv4ToNumber(address) {
+  return address.split(".").reduce((acc, part) => ((acc << 8) + Number(part)) >>> 0, 0);
 }
 
 function validateCsrf(req) {
