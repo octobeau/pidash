@@ -2,10 +2,10 @@
 set -eu
 
 # Ensure nodeuser can write to /data (mounted volumes may have root ownership)
-if [ -d /data ]; then
-  chown -R nodeuser:nodeuser /data
-  chmod 750 /data
-fi
+# Note: chown/chmod may fail in restrictive Docker setups, but the directory should still be writable
+mkdir -p /data 2>/dev/null || true
+chown -R nodeuser:nodeuser /data 2>/dev/null || true
+chmod 777 /data 2>/dev/null || true
 
 if [ "${ENABLE_HTTPS:-false}" = "true" ]; then
   cert_file="${TLS_CERT_FILE:-/app/certs/selfsigned.crt}"
