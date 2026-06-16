@@ -764,14 +764,14 @@ export function isAuthorized(req) {
   }
 }
 
-function isProxyAuthorized(req) {
+export function isProxyAuthorized(req) {
   // Only accept proxied identity headers when the request comes from a trusted proxy
   if (!isRequestFromTrustedProxy(req)) return false;
   const username = headerValue(req, authProxyUserHeader);
   return Boolean(username);
 }
 
-function isRequestFromTrustedProxy(req) {
+export function isRequestFromTrustedProxy(req) {
   try {
     const remote = String(req.socket?.remoteAddress || req.connection?.remoteAddress || "");
     // Normalize IPv4-mapped IPv6 addresses like ::ffff:127.0.0.1
