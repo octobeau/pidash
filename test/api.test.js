@@ -55,6 +55,24 @@ test('API Integration Tests', async (t) => {
       assert.ok(data.servers !== undefined);
     });
 
+    await t.test('static 404 responses include security headers', async () => {
+      const response = await fetch(`http://localhost:${PORT}/does-not-exist`);
+      assert.strictEqual(response.status, 404);
+      assert.ok(response.headers.get('content-security-policy'));
+      assert.strictEqual(response.headers.get('x-frame-options'), 'DENY');
+    });
+
+    await t.test('CSRF failures include security headers', async () => {
+      const response = await fetch(`http://localhost:${PORT}/api/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: 'http://127.0.0.1' })
+      });
+      assert.strictEqual(response.status, 403);
+      assert.ok(response.headers.get('content-security-policy'));
+      assert.strictEqual(response.headers.get('cache-control'), 'no-store');
+    });
+
   } finally {
     if (serverProcess) {
       serverProcess.kill();
