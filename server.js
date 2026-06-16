@@ -25,7 +25,25 @@ const dashboardPassword = process.env.DASHBOARD_PASSWORD || "";
 const authProxyUserHeader = normalizeHeaderName(process.env.AUTH_PROXY_USER_HEADER || "x-forwarded-user");
 const authProxyEmailHeader = normalizeHeaderName(process.env.AUTH_PROXY_EMAIL_HEADER || "x-forwarded-email");
 const authProxyNameHeader = normalizeHeaderName(process.env.AUTH_PROXY_NAME_HEADER || "x-forwarded-name");
-const encryptionSecret = process.env.CONFIG_ENCRYPTION_KEY || "";
+
+// Encryption key: prefer file-based secret for safer orchestration integrations
+const encryptionKeyFile = process.env.CONFIG_ENCRYPTION_KEY_FILE || "";
+let encryptionSecret = process.env.CONFIG_ENCRYPTION_KEY || "";
+if (encryptionKeyFile) {
+  try {
+    const fileVal = readFileSync(encryptionKeyFile, "utf8").trim();
+    if (fileVal) encryptionSecret = fileVal;
+  } catch (e) {
+    // ignore; we'll fall back to env var if present
+  }
+}
+
+// Proxy trust configuration: comma-separated list of IPs or prefixes
+const trustedProxiesRaw = String(process.env.TRUSTED_PROXIES || "127.0.0.1,::1");
+const trustedProxies = trustedProxiesRaw.split(/[,\s]+/).filter(Boolean);
+
+// CSRF protection secret (optional). If set, clients must send X-CSRF-Token header.
+const csrfSecret = process.env.CSRF_SECRET || "";
 const advertisedHosts = String(process.env.DASHBOARD_PUBLIC_HOST || process.env.PUBLIC_HOST || "");
 
 const colors = ["#39d98a", "#4c9ffe", "#f97373", "#f5b642", "#a78bfa", "#22d3ee"];
@@ -45,6 +63,15 @@ const mimeTypes = {
 export const requestHandler = async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+
+    // CSRF protection for state-changing API requests
+    if (req.method !== "GET" && req.method !== "HEAD" && url.pathname.startsWith("/api/")) {
+      if (!validateCsrf(req)) {
+        res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("CSRF validation failed");
+        return;
+      }
+    }
 
     if (req.method === "GET" && url.pathname === "/healthz") {
       return sendJson(res, { ok: true });
@@ -737,9 +764,42 @@ export function isAuthorized(req) {
   }
 }
 
-function isProxyAuthorized(req) {
+export function isProxyAuthorized(req) {
+  // Only accept proxied identity headers when the request comes from a trusted proxy
+  if (!isRequestFromTrustedProxy(req)) return false;
   const username = headerValue(req, authProxyUserHeader);
   return Boolean(username);
+}
+
+export function isRequestFromTrustedProxy(req) {
+  try {
+    const remote = String(req.socket?.remoteAddress || req.connection?.remoteAddress || "");
+    // Normalize IPv4-mapped IPv6 addresses like ::ffff:127.0.0.1
+    const normalized = remote.replace(/^::ffff:/, "");
+    if (trustedProxies.includes(normalized)) return true;
+    // allow prefix match (e.g., 172.17.)
+    return trustedProxies.some((p) => normalized.startsWith(p));
+  } catch {
+    return false;
+  }
+}
+
+function validateCsrf(req) {
+  // If a CSRF secret is configured, require the header to match.
+  if (csrfSecret) {
+    const token = req.headers["x-csrf-token"] || req.headers["x-xsrf-token"] || "";
+    return token === csrfSecret;
+  }
+
+  // Fallback: require a same-origin request via Origin/Referer check.
+  const origin = req.headers.origin || req.headers.referer || "";
+  if (!origin) return false;
+  try {
+    const parsed = new URL(origin);
+    return parsed.host === (req.headers.host || "");
+  } catch {
+    return false;
+  }
 }
 
 export function currentUser(req) {
