@@ -1,6 +1,12 @@
 #!/bin/sh
 set -eu
 
+# Ensure nodeuser can write to /data (mounted volumes may have root ownership)
+if [ -d /data ]; then
+  chown -R nodeuser:nodeuser /data
+  chmod 750 /data
+fi
+
 if [ "${ENABLE_HTTPS:-false}" = "true" ]; then
   cert_file="${TLS_CERT_FILE:-/app/certs/selfsigned.crt}"
   key_file="${TLS_KEY_FILE:-/app/certs/selfsigned.key}"
