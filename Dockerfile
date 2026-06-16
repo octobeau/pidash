@@ -4,7 +4,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8080
 
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl su-exec
 
 COPY package.json server.js ./
 COPY public ./public
@@ -18,5 +18,4 @@ RUN chown -R nodeuser:nodeuser /app
 
 EXPOSE 8080 8443
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-USER nodeuser
 CMD ["node", "--disable-warning=ExperimentalWarning", "server.js"]
