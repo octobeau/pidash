@@ -252,6 +252,7 @@ function renderSettings() {
         <label class="field"><span>Name</span><input data-field="name" value="${escapeAttr(server.name || "")}"></label>
         <label class="field"><span>URL</span><input data-field="url" value="${escapeAttr(server.url || "")}" placeholder="http://192.168.1.2"></label>
         <label class="field"><span>Password or Token</span><input data-field="password" type="password" value="" placeholder="${server.hasPassword ? "Stored encrypted" : "Optional"}"></label>
+        ${server.hasPassword ? `<div class="field checkbox-field"><span>Stored Credential</span><label><input data-clear-password type="checkbox"> Clear stored password/token</label></div>` : ""}
         <label class="field"><span>API Version</span>
           <select data-field="version">
             <option value="auto" ${server.version === "auto" ? "selected" : ""}>Auto</option>
@@ -317,7 +318,12 @@ function readSettingsServers({ includeEmpty }) {
       output[field.dataset.field] = field.value.trim();
     });
     output.enabled = output.enabled !== "false";
-    if (!output.password) delete output.password;
+    if (card.querySelector("[data-clear-password]")?.checked) {
+      output.password = "";
+      output.clearPassword = true;
+    } else if (!output.password) {
+      delete output.password;
+    }
     return output;
   }).filter((server) => includeEmpty || server.url);
 }

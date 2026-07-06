@@ -20,7 +20,8 @@ test('API Integration Tests', async (t) => {
         PORT: String(PORT),
         AUTH_MODE: 'none',
         PIHOLE_CONFIG: path.join(__dirname, 'test-config.json'),
-        DATABASE_PATH: testDatabasePath
+        DATABASE_PATH: testDatabasePath,
+        CONFIG_ENCRYPTION_KEY: Buffer.from('b'.repeat(32)).toString('base64')
       },
       stdio: 'inherit'
     });
@@ -71,6 +72,40 @@ test('API Integration Tests', async (t) => {
       assert.strictEqual(response.status, 403);
       assert.ok(response.headers.get('content-security-policy'));
       assert.strictEqual(response.headers.get('cache-control'), 'no-store');
+    });
+
+    await t.test('PUT /api/servers can clear a stored password', async () => {
+      const createResponse = await fetch(`http://localhost:${PORT}/api/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: `http://localhost:${PORT}` },
+        body: JSON.stringify({
+          name: 'Clear Password Test',
+          url: 'https://192.168.1.118',
+          password: 'old-v5-token',
+          version: '6',
+          color: '#39d98a',
+          enabled: true
+        })
+      });
+      assert.strictEqual(createResponse.status, 201);
+      const created = await createResponse.json();
+      assert.strictEqual(created.hasPassword, true);
+
+      const updateResponse = await fetch(`http://localhost:${PORT}/api/servers/${created.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Origin: `http://localhost:${PORT}` },
+        body: JSON.stringify({
+          name: 'Clear Password Test',
+          url: 'https://192.168.1.118',
+          version: '6',
+          color: '#39d98a',
+          enabled: true,
+          clearPassword: true
+        })
+      });
+      assert.strictEqual(updateResponse.status, 200);
+      const updated = await updateResponse.json();
+      assert.strictEqual(updated.hasPassword, false);
     });
 
   } finally {

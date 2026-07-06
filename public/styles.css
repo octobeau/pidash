@@ -487,6 +487,19 @@ h1 {
   border-radius: 8px;
 }
 
+.checkbox-field label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  color: var(--text);
+}
+
+.checkbox-field input {
+  width: auto;
+  height: auto;
+}
+
 .small-field {
   width: 180px;
   margin-top: 16px;

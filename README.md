@@ -56,7 +56,7 @@ DASHBOARD_PUBLIC_HOST=pidash.local
 The compose file uses `ghcr.io/octobeau/pidash:latest` by default. To pin a release or test another build, set `PIDASH_IMAGE` in `.env`:
 
 ```dotenv
-PIDASH_IMAGE=ghcr.io/octobeau/pidash:v0.1.0
+PIDASH_IMAGE=ghcr.io/octobeau/pidash:v0.1.1
 ```
 
 ### Docker Run
