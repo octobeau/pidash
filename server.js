@@ -335,9 +335,12 @@ export function updateServerConfig(id, input) {
   const existing = db.prepare("SELECT * FROM servers WHERE id = ?").get(id);
   if (!existing) throw new Error("Server not found");
 
-  const normalized = normalizeServer({ ...input, password: input.password || decryptPassword(existing.password_cipher) });
+  const clearPassword = input.clearPassword === true;
+  const hasPasswordInput = Object.prototype.hasOwnProperty.call(input, "password");
+  const password = clearPassword ? "" : hasPasswordInput ? input.password : decryptPassword(existing.password_cipher);
+  const normalized = normalizeServer({ ...input, password });
   if (!normalized) throw new Error("Server URL is required");
-  const passwordCipher = input.password ? encryptPassword(input.password) : existing.password_cipher;
+  const passwordCipher = clearPassword ? "" : hasPasswordInput ? encryptPassword(input.password) : existing.password_cipher;
   db.prepare(`
     UPDATE servers
     SET name = ?, url = ?, password_cipher = ?, version = ?, color = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
@@ -535,12 +538,29 @@ async function v6Headers(server) {
   });
   const session = auth.session || auth;
   const sid = session.sid;
-  if (!sid) throw new Error("Pi-hole v6 auth did not return a session id");
+  if (!sid && session.valid === true && /no password set/i.test(String(session.message || ""))) {
+    return {};
+  }
+  if (!sid) throw new Error(v6MissingSidMessage(session));
   sessionCache.set(server.id, {
     sid,
     expires: Date.now() + Number(session.validity || 300) * 1000
   });
   return { "X-FTL-SID": sid };
+}
+
+function v6MissingSidMessage(session) {
+  const parts = ["Pi-hole v6 auth did not return a session id"];
+  if (session.totp) {
+    parts.push("2FA appears to be enabled; use a Pi-hole application password in Pidash");
+  }
+  if (session.valid === false) {
+    parts.push("Pi-hole marked the session invalid");
+  }
+  if (session.message) {
+    parts.push(String(session.message));
+  }
+  return parts.join(": ");
 }
 
 export async function fetchV5(server) {
@@ -574,7 +594,8 @@ export async function getJson(url, options = {}, optional = false) {
     const response = await fetch(url, { ...options, signal: controller.signal });
     if (!response.ok) {
       if (optional && [401, 403, 404].includes(response.status)) return null;
-      throw new Error(`${response.status} ${response.statusText} from ${new URL(url).pathname}`);
+      const detail = await responseErrorDetail(response);
+      throw new Error(`${response.status} ${response.statusText} from ${new URL(url).pathname}${detail ? `: ${detail}` : ""}`);
     }
     if (response.status === 204) return null;
     return await response.json();
@@ -584,6 +605,20 @@ export async function getJson(url, options = {}, optional = false) {
     throw new Error(formatFetchError(error, url));
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function responseErrorDetail(response) {
+  const type = response.headers.get("content-type") || "";
+  try {
+    if (type.includes("application/json")) {
+      const body = await response.json();
+      return body?.error?.message || body?.error?.key || body?.message || "";
+    }
+    const body = await response.text();
+    return body.trim().slice(0, 200);
+  } catch {
+    return "";
   }
 }
 
