@@ -196,21 +196,23 @@ export async function getQueryLog(server, limit = 100) {
 // ── v6 session management ────────────────────────────────────────────────────
 
 async function v6Headers(server) {
-  if (!server.password) return {};
   const cached = sessionCache.get(server.id);
-  if (cached?.expires > Date.now() + 5000) return { "X-FTL-SID": cached.sid };
+  if (cached?.expires > Date.now() + 5000) return cached.sid ? { "X-FTL-SID": cached.sid } : {};
 
   const auth = await getJson(`${server.url}/api/auth`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password: server.password })
+    body: JSON.stringify({ password: server.password || "" })
   });
-  const session = auth.session || auth;
-  const sid = session.sid;
-  if (!sid && session.valid === true && /no password set/i.test(String(session.message || ""))) {
+  const session = auth?.session || auth;
+  const sid = session?.sid;
+
+  // Passwordless Pi-hole v6: valid session with no SID needed
+  if (!sid && session?.valid === true) {
+    sessionCache.set(server.id, { sid: null, expires: Date.now() + 270_000 });
     return {};
   }
-  if (!sid) throw new Error(v6MissingSidMessage(session));
+  if (!sid) throw new Error(v6MissingSidMessage(session || {}));
   sessionCache.set(server.id, { sid, expires: Date.now() + Number(session.validity || 300) * 1000 });
   return { "X-FTL-SID": sid };
 }
