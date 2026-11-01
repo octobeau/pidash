@@ -1,19 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Pi-hole Multi-Dashboard</title>
-    <link rel="icon" href="/icon.svg" type="image/svg+xml">
-    <link rel="apple-touch-icon" href="/icon.svg">
-    <link rel="stylesheet" href="/styles.css?v=6">
+    <title>PiDash</title>
+    <link rel="icon" href="/icon.svg?v=7" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/icon.svg?v=7">
+    <link rel="stylesheet" href="/styles.css?v=7">
   </head>
   <body>
     <header class="app-header">
       <div class="brand">
-        <img class="mark" src="/icon.svg" alt="" aria-hidden="true">
+        <img class="mark" src="/icon.svg?v=7" alt="" aria-hidden="true">
         <div>
-          <h1>Pi-hole Multi-Dashboard</h1>
+          <h1>PiDash</h1>
           <p id="subtitle">Loading servers</p>
         </div>
       </div>
@@ -22,42 +22,101 @@
           <span class="live-dot" id="liveDot"></span>
           <span id="refreshLabel">Waiting</span>
         </div>
-        <button class="icon-button active" id="autoButton" title="Toggle auto refresh" aria-label="Toggle auto refresh">Auto</button>
-        <button class="icon-button" id="refreshButton" title="Refresh now" aria-label="Refresh now">Refresh</button>
-        <button class="icon-button" id="settingsButton" title="Settings" aria-label="Settings">Settings</button>
+        <button class="icon-button active" id="autoButton" title="Toggle auto refresh" aria-label="Toggle auto refresh" aria-pressed="true">
+          <span class="btn-label">Auto</span>
+        </button>
+        <button class="icon-button" id="refreshButton" title="Refresh now" aria-label="Refresh now">
+          <span class="btn-label">Refresh</span>
+        </button>
+        <button class="icon-button" id="alertsButton" title="Alerts" aria-label="Alerts" aria-haspopup="true" aria-expanded="false">
+          <span class="btn-label">Alerts</span>
+          <span class="alert-badge" id="alertBadge" hidden>0</span>
+        </button>
+        <button class="icon-button" id="themeButton" title="Toggle dark/light mode" aria-label="Toggle theme">
+          <span class="btn-label" id="themeLabel">☀</span>
+        </button>
+        <button class="icon-button" id="settingsButton" title="Settings" aria-label="Settings">
+          <span class="btn-label">Settings</span>
+        </button>
       </div>
     </header>
 
+    <!-- Alerts panel -->
+    <aside class="alerts-panel" id="alertsPanel" hidden>
+      <div class="alerts-head">
+        <span>Alerts</span>
+        <button class="plain-button" id="dismissAlertsButton">Dismiss all</button>
+      </div>
+      <div class="alerts-list" id="alertsList"></div>
+    </aside>
+
     <main class="shell">
-      <section class="summary-grid" id="summaryGrid"></section>
+      <section class="summary-grid" id="summaryGrid">
+        <div class="metric skeleton"></div>
+        <div class="metric skeleton"></div>
+        <div class="metric skeleton"></div>
+        <div class="metric skeleton"></div>
+        <div class="metric skeleton"></div>
+        <div class="metric skeleton"></div>
+      </section>
 
       <nav class="tabs" aria-label="Dashboard views">
         <button class="tab active" data-tab="overview">Overview</button>
         <button class="tab" data-tab="lists">Top Lists</button>
+        <button class="tab" data-tab="history">History</button>
+        <button class="tab" data-tab="queries">Query Log</button>
         <button class="tab" data-tab="compare">Compare</button>
       </nav>
 
-      <section class="tab-panel active" id="overview"></section>
+      <section class="tab-panel active" id="overview">
+        <div class="server-grid skeleton-grid">
+          <div class="server-card skeleton tall"></div>
+          <div class="server-card skeleton tall"></div>
+        </div>
+      </section>
       <section class="tab-panel" id="lists"></section>
+      <section class="tab-panel" id="history">
+        <div class="history-toolbar">
+          <div class="range-pills" id="rangePills">
+            <button class="range-pill" data-range="1h">1h</button>
+            <button class="range-pill" data-range="6h">6h</button>
+            <button class="range-pill active" data-range="24h">24h</button>
+            <button class="range-pill" data-range="7d">7d</button>
+          </div>
+        </div>
+        <div id="historyContent"></div>
+      </section>
+      <section class="tab-panel" id="queries">
+        <div class="query-toolbar" id="queryToolbar" hidden>
+          <label class="query-filter">
+            <span class="sr-only">Filter by domain</span>
+            <input id="queryFilter" type="search" placeholder="Filter domain…" aria-label="Filter queries by domain">
+          </label>
+          <div id="queryServerTabs" class="query-server-tabs"></div>
+        </div>
+        <div id="queriesContent"><div class="notice">Select a server to load its query log.</div></div>
+      </section>
       <section class="tab-panel" id="compare"></section>
     </main>
 
-    <dialog class="settings" id="settingsDialog">
+    <!-- Settings dialog -->
+    <dialog class="settings" id="settingsDialog" aria-label="Settings">
       <form method="dialog">
         <div class="dialog-head">
           <h2>Settings</h2>
-          <button class="plain-button" value="cancel" aria-label="Close">Close</button>
+          <button class="plain-button" value="cancel" aria-label="Close settings">Close</button>
         </div>
       </form>
       <div class="dialog-body">
+        <div id="settingsError" class="settings-error" hidden></div>
         <div class="settings-toolbar">
           <button id="addServerButton" class="solid-button" type="button">Add Server</button>
-          <button id="useDockerConfigButton" class="plain-button" type="button">Reload Servers</button>
+          <button id="reloadServersButton" class="plain-button" type="button">Reload Servers</button>
         </div>
         <div id="settingsServers"></div>
         <label class="field small-field">
-          <span>Refresh Seconds</span>
-          <input id="refreshSeconds" type="number" min="5" max="300" step="5">
+          <span>Refresh Interval (seconds)</span>
+          <input id="refreshSeconds" type="number" min="10" max="300" step="5">
         </label>
       </div>
       <div class="dialog-foot">
@@ -65,6 +124,9 @@
       </div>
     </dialog>
 
-    <script src="/app.js?v=6" type="module"></script>
+    <!-- Toast notification -->
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="/app.js?v=7" type="module"></script>
   </body>
 </html>

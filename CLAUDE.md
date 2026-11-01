@@ -9,10 +9,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm test
 
 # Run a single test file
-node --test test/utils.test.js
+node --test test/db.test.js
 
-# Syntax check the server without running it
+# Syntax check all modules without running
 npm run check
+node --check src/crypto.js src/auth.js src/db.js src/pihole.js
 
 # Start the server locally (requires .env)
 cp .env.example .env   # first time only
@@ -22,49 +23,107 @@ npm start
 docker compose up --build
 ```
 
-Tests require Node ≥ 22.5 (uses `node:sqlite` and `node:test`). The integration test in `test/api.test.js` spawns a real server process on port 8081 and cleans up after itself.
+Tests require Node ≥ 22.5 (uses `node:sqlite` and `node:test`). Each test file sets
+`DATABASE_PATH=:memory:` before importing to avoid cross-file SQLite lock conflicts.
+`test/api.test.js` spawns a real server on port 8081 with a temp SQLite file.
 
 ## Architecture
 
-**No npm dependencies.** The entire backend is `server.js` — a single ES module using only Node built-ins (`node:http`, `node:https`, `node:sqlite`, `node:crypto`, `node:fs`, etc.). The frontend is vanilla JS/CSS in `public/`.
+**No npm dependencies.** The backend is split across four `src/` modules and a thin
+`server.js` router, all using only Node built-ins.
+
+```
+server.js          — request handler, routes, startup, re-exports for tests
+src/
+  crypto.js        — AES-256-GCM password encrypt/decrypt
+  auth.js          — Basic/proxy auth, CSRF tokens, security headers, safeEqual
+  db.js            — SQLite CRUD (servers, metrics, alerts), normalizeServer
+  pihole.js        — Pi-hole API client (v5/v6), collectSnapshot, toggleBlocking, getQueryLog
+public/
+  index.html       — HTML shell (tabs: Overview, Top Lists, History, Query Log, Compare)
+  styles.css       — CSS with dark/light mode tokens, responsive layout, skeleton loaders
+  app.js           — Vanilla JS frontend (no framework)
+test/
+  api.test.js      — Integration tests (real server process)
+  db.test.js       — DB CRUD + metrics/alerts unit tests
+  pihole.test.js   — Pi-hole client unit tests
+  security.test.js — Auth/proxy/CSRF tests
+  utils.test.js    — Crypto + normalizeServer tests
+```
 
 ### Request flow
 
 1. `server.js:requestHandler` handles all routes.
-2. CSRF validation runs first for non-GET `/api/*` requests (same-origin `Origin`/`Referer` check, or token match if `CSRF_SECRET` is set).
-3. `isAuthorized` enforces `AUTH_MODE`: `basic` (HTTP Basic Auth), `proxy` (trusted identity headers), or `none`.
-4. `/api/snapshot` (POST) — the main data endpoint — calls `collectSnapshot`, which fans out parallel `collectServer` calls per Pi-hole.
-5. Each `collectServer` calls `fetchV6`, `fetchV5`, or `fetchAuto` (tries v6 then v5). Pi-hole v6 requires a session token obtained via `POST /api/auth`; tokens are cached in `sessionCache` (in-memory Map).
-6. Static files are served from `public/` for all other GET requests.
+2. CSRF validation runs first for non-GET `/api/*` (HMAC token or same-origin fallback).
+3. `isAuthorized` enforces `AUTH_MODE`: `basic`, `proxy`, or `none`.
+4. Route handlers delegate to `src/db.js` for data and `src/pihole.js` for live queries.
+5. After every fresh snapshot, `recordMetrics` and `generateAlerts` persist state to SQLite.
 
 ### Data storage
 
-SQLite via `node:sqlite` (`DatabaseSync`). The database path defaults to `data/pidash.sqlite` and is configurable via `DATABASE_PATH`. The schema is a single `servers` table. Passwords are encrypted with AES-256-GCM (`encryptPassword` / `decryptPassword`) using `CONFIG_ENCRYPTION_KEY`. The browser never receives stored passwords — only `hasPassword: true`.
+SQLite via `node:sqlite` (`DatabaseSync`). Three tables:
 
-An optional JSON seed file (`PIHOLE_CONFIG`) populates the database on first run when the `servers` table is empty.
+| Table | Purpose |
+|---|---|
+| `servers` | Pi-hole server config (name, url, encrypted password, version, color, enabled) |
+| `metrics` | Per-server time-series snapshot data (retained 30 days) |
+| `alerts` | Online/offline transition events |
+
+Passwords are encrypted with AES-256-GCM (`encryptPassword` / `decryptPassword`).
+The browser never receives stored passwords — only `hasPassword: true`.
+
+### Security model
+
+- CSRF: per-session tokens via `GET /api/csrf-token` (stored server-side, 1h TTL)
+  — with same-origin Origin/Referer check as fallback for requests without a token.
+- `safeEqual`: HMAC-SHA256 both inputs against a random per-process key before
+  `timingSafeEqual`, eliminating the length timing leak of direct buffer comparison.
+- Security headers on every response: `CSP`, `X-Frame-Options`, `X-Content-Type-Options`,
+  `Referrer-Policy`, `Permissions-Policy`; `Strict-Transport-Security` when HTTPS is on.
+- Self-signed certs generated with ECDSA P-256 (replaces RSA 2048).
+
+### API surface (v2)
+
+```
+GET  /healthz
+GET  /api/csrf-token              → {token}
+GET  /api/me                      → {mode, username, ...}
+GET  /api/config                  → {authMode, encryptionConfigured, servers}
+POST /api/snapshot                → full snapshot from all servers
+GET  /api/history?range=1h|6h|24h|7d → time-series per server
+GET  /api/alerts                  → {alerts, unread}
+POST /api/alerts/read             → mark all read
+GET  /api/servers                 → list
+POST /api/servers                 → create
+PUT  /api/servers/:id             → update
+DELETE /api/servers/:id           → delete (404 if unknown)
+POST /api/servers/:id/test        → single-server connectivity test
+POST /api/servers/:id/blocking    → toggle blocking {enabled: bool}
+GET  /api/servers/:id/queries     → query log proxy (?limit=)
+```
 
 ### Key env vars
 
 | Variable | Purpose |
 |---|---|
-| `CONFIG_ENCRYPTION_KEY` | Required to store/read Pi-hole passwords |
+| `CONFIG_ENCRYPTION_KEY` | Required to store/read Pi-hole passwords (base64 32-byte key) |
+| `CONFIG_ENCRYPTION_KEY_FILE` | File path alternative to env var |
 | `AUTH_MODE` | `basic` (default), `proxy`, or `none` |
 | `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` | Basic auth credentials |
 | `TRUSTED_PROXIES` | Comma-separated IPs/CIDRs/prefixes for proxy auth mode |
 | `AUTH_PROXY_*_HEADER` | Header names injected by IdP in proxy mode |
-| `ENABLE_HTTPS` / `HTTPS_PORT` | Enable self-signed HTTPS on the app itself |
-| `TLS_CERT_FILE` / `TLS_KEY_FILE` | Override self-signed cert with your own |
-| `NODE_TLS_REJECT_UNAUTHORIZED` | Set to `0` only for Pi-holes with self-signed certs |
+| `ENABLE_HTTPS` / `HTTPS_PORT` | Enable ECDSA self-signed HTTPS |
+| `TLS_CERT_FILE` / `TLS_KEY_FILE` | Override self-signed cert |
+| `NODE_TLS_REJECT_UNAUTHORIZED` | Set `0` only for Pi-holes with self-signed certs |
 | `PIHOLE_TIMEOUT_MS` | Per-request timeout to Pi-hole APIs (default 7000ms) |
-
-### Pi-hole API normalization
-
-`fetchV6` and `fetchV5` each return a common shape: `{ version, summary, queryTypes, topDomains, topBlocked, topClients, upstreams, history }`. The helper functions `objectFromAny`, `listFromAny`, and `historyFromAny` handle the inconsistent field names across Pi-hole API versions. `normalizeV5Summary` and `normalizeV6Summary` map version-specific fields to the shared `summary` shape.
-
-### Proxy trust model
-
-`parseTrustedProxyRules` parses `TRUSTED_PROXIES` into rule objects (exact IP, IPv4 CIDR, or wildcard prefix). `isRequestFromTrustedProxy` checks the socket's remote address against those rules before accepting identity headers in proxy auth mode.
+| `DATABASE_PATH` | SQLite path (default `data/pidash.sqlite`; use `:memory:` in tests) |
 
 ### Exports used by tests
 
-`server.js` exports: `requestHandler`, `loadServers`, `normalizeServer`, `listServerConfigs`, `createServerConfig`, `updateServerConfig`, `deleteServerConfig`, `encryptPassword`, `decryptPassword`, `collectSnapshot`, `collectServer`, `fetchV6`, `fetchV5`, `getJson`, `sendUnauthorized`, `isAuthorized`, `isProxyAuthorized`, `isRequestFromTrustedProxy`, `parseTrustedProxyRules`, `matchesTrustedProxyRule`, `currentUser`.
+`server.js` re-exports from `src/` modules:
+`requestHandler`, `loadServers`, `normalizeServer`, `listServerConfigs`,
+`createServerConfig`, `updateServerConfig`, `deleteServerConfig`,
+`encryptPassword`, `decryptPassword`, `collectSnapshot`, `collectServer`,
+`fetchV6`, `fetchV5`, `getJson`, `sendUnauthorized`, `isAuthorized`,
+`isProxyAuthorized`, `isRequestFromTrustedProxy`, `parseTrustedProxyRules`,
+`matchesTrustedProxyRule`, `currentUser`.

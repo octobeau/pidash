@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert';
 
-// We use dynamic import so we can set the env var BEFORE server.js is loaded/evaluated
+// Set env vars BEFORE importing server.js so modules evaluate with the right config.
 process.env.CONFIG_ENCRYPTION_KEY = Buffer.from('a'.repeat(32)).toString('base64');
+process.env.DATABASE_PATH = ':memory:';
 const { normalizeServer, encryptPassword, decryptPassword, fetchV6, getJson } = await import('../server.js');
 
 test('Utility Functions', async (t) => {

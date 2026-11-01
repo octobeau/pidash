@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert';
 
-// Set trusted proxies before importing the server module
+// Set env vars before importing the server module so modules evaluate with the right config.
 process.env.TRUSTED_PROXIES = '127.0.0.1,::1,10.0.0.1,172.18.0.0/16,192.168.*';
 process.env.AUTH_MODE = 'proxy';
+process.env.DATABASE_PATH = ':memory:';
 
 const { isProxyAuthorized, isAuthorized, matchesTrustedProxyRule, normalizeServer, parseTrustedProxyRules } = await import('../server.js');
 

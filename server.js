@@ -1,13 +1,27 @@
 import { createServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
-import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
-import { isIP } from "node:net";
 import { networkInterfaces } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { encryptPassword, decryptPassword } from "./src/crypto.js";
+import {
+  authMode, generateCsrfToken, validateCsrf,
+  isAuthorized, isProxyAuthorized, isRequestFromTrustedProxy,
+  parseTrustedProxyRules, matchesTrustedProxyRule,
+  sendUnauthorized, currentUser, securityHeaders
+} from "./src/auth.js";
+import {
+  db, normalizeServer, loadServers, listServerConfigs,
+  createServerConfig, updateServerConfig, deleteServerConfig,
+  recordMetrics, getHistory, generateAlerts, getAlerts, markAlertsRead, unreadAlertCount
+} from "./src/db.js";
+import {
+  collectSnapshot, collectServer, fetchV6, fetchV5, getJson,
+  toggleBlocking, getQueryLog
+} from "./src/pihole.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
@@ -17,40 +31,9 @@ const httpsEnabled = String(process.env.ENABLE_HTTPS || "").toLowerCase() === "t
 const httpsPort = Number(process.env.HTTPS_PORT || 8443);
 const tlsCertFile = process.env.TLS_CERT_FILE || path.join(__dirname, "certs", "selfsigned.crt");
 const tlsKeyFile = process.env.TLS_KEY_FILE || path.join(__dirname, "certs", "selfsigned.key");
-const configPath = process.env.PIHOLE_CONFIG || path.join(__dirname, "config", "piholes.json");
-const databasePath = process.env.DATABASE_PATH || path.join(__dirname, "data", "pidash.sqlite");
-const timeoutMs = Number(process.env.PIHOLE_TIMEOUT_MS || 7000);
-const authMode = String(process.env.AUTH_MODE || "basic").toLowerCase();
-const dashboardUser = process.env.DASHBOARD_USERNAME || "admin";
-const dashboardPassword = process.env.DASHBOARD_PASSWORD || "";
-const authProxyUserHeader = normalizeHeaderName(process.env.AUTH_PROXY_USER_HEADER || "x-forwarded-user");
-const authProxyEmailHeader = normalizeHeaderName(process.env.AUTH_PROXY_EMAIL_HEADER || "x-forwarded-email");
-const authProxyNameHeader = normalizeHeaderName(process.env.AUTH_PROXY_NAME_HEADER || "x-forwarded-name");
-
-// Encryption key: prefer file-based secret for safer orchestration integrations
-const encryptionKeyFile = process.env.CONFIG_ENCRYPTION_KEY_FILE || "";
-let encryptionSecret = process.env.CONFIG_ENCRYPTION_KEY || "";
-if (encryptionKeyFile) {
-  try {
-    const fileVal = readFileSync(encryptionKeyFile, "utf8").trim();
-    if (fileVal) encryptionSecret = fileVal;
-  } catch (e) {
-    // ignore; we'll fall back to env var if present
-  }
-}
-
-// Proxy trust configuration: comma-separated list of exact IPs, IPv4 CIDRs, or explicit wildcard prefixes.
-const trustedProxiesRaw = String(process.env.TRUSTED_PROXIES || "127.0.0.1,::1");
-const trustedProxyRules = parseTrustedProxyRules(trustedProxiesRaw);
-
-// CSRF protection secret (optional). If set, clients must send X-CSRF-Token header.
-const csrfSecret = process.env.CSRF_SECRET || "";
 const advertisedHosts = String(process.env.DASHBOARD_PUBLIC_HOST || process.env.PUBLIC_HOST || "");
 
-const colors = ["#39d98a", "#4c9ffe", "#f97373", "#f5b642", "#a78bfa", "#22d3ee"];
-const sessionCache = new Map();
 let loggedDockerBridgeHostHint = false;
-const db = openDatabase();
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -61,81 +44,163 @@ const mimeTypes = {
   ".ico": "image/x-icon"
 };
 
+// Static assets that are versioned via query-string cache-busting
+const IMMUTABLE_EXTS = new Set([".css", ".js", ".svg", ".ico", ".png", ".woff2"]);
+
 export const requestHandler = async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    const headers = securityHeaders(httpsEnabled);
 
-    // CSRF protection for state-changing API requests
+    // CSRF check for all state-changing API calls
     if (req.method !== "GET" && req.method !== "HEAD" && url.pathname.startsWith("/api/")) {
       if (!validateCsrf(req)) {
-        res.writeHead(403, {
-          ...securityHeaders(),
-          "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-store"
-        });
+        res.writeHead(403, { ...headers, "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
         res.end("CSRF validation failed");
         return;
       }
     }
 
+    // Health check (no auth)
     if (req.method === "GET" && url.pathname === "/healthz") {
-      return sendJson(res, { ok: true });
+      return sendJson(res, { ok: true }, 200, headers);
+    }
+
+    // CSRF token endpoint (no auth — public, safe to call before login)
+    if (req.method === "GET" && url.pathname === "/api/csrf-token") {
+      return sendJson(res, { token: generateCsrfToken() }, 200, headers);
     }
 
     if (!isAuthorized(req)) {
-      return sendUnauthorized(res);
+      return sendUnauthorized(res, httpsEnabled);
     }
 
+    // ── Authenticated routes ──────────────────────────────────────────────
+
     if (req.method === "GET" && url.pathname === "/api/me") {
-      return sendJson(res, currentUser(req));
+      return sendJson(res, currentUser(req), 200, headers);
     }
 
     if (req.method === "GET" && url.pathname === "/api/config") {
+      const { encryptPassword: _enc, ..._ } = {};
       return sendJson(res, {
         authMode,
-        encryptionConfigured: Boolean(encryptionSecret),
+        encryptionConfigured: Boolean(process.env.CONFIG_ENCRYPTION_KEY || process.env.CONFIG_ENCRYPTION_KEY_FILE),
         servers: listServerConfigs()
-      });
+      }, 200, headers);
     }
 
     if (req.method === "POST" && url.pathname === "/api/snapshot") {
       const servers = loadServers();
       const snapshot = await collectSnapshot(servers);
-      return sendJson(res, snapshot);
+      if (!snapshot.cached) {
+        recordMetrics(snapshot);
+        generateAlerts(snapshot);
+      }
+      return sendJson(res, snapshot, 200, headers);
     }
 
+    if (req.method === "GET" && url.pathname === "/api/history") {
+      const range = url.searchParams.get("range") || "24h";
+      return sendJson(res, { history: getHistory(range) }, 200, headers);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/alerts") {
+      return sendJson(res, { alerts: getAlerts(), unread: unreadAlertCount() }, 200, headers);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/alerts/read") {
+      markAlertsRead();
+      return sendJson(res, { ok: true }, 200, headers);
+    }
+
+    // /api/servers collection
     if (url.pathname === "/api/servers") {
-      if (req.method === "GET") return sendJson(res, { servers: listServerConfigs() });
-      if (req.method === "POST") return sendJson(res, createServerConfig(await readJsonBody(req)), 201);
+      if (req.method === "GET") return sendJson(res, { servers: listServerConfigs() }, 200, headers);
+      if (req.method === "POST") return sendJson(res, createServerConfig(await readJsonBody(req)), 201, headers);
     }
 
+    // /api/servers/:id
     const serverRoute = url.pathname.match(/^\/api\/servers\/(\d+)$/);
     if (serverRoute) {
       const id = Number(serverRoute[1]);
-      if (req.method === "PUT") return sendJson(res, updateServerConfig(id, await readJsonBody(req)));
+      if (req.method === "PUT") {
+        try {
+          return sendJson(res, updateServerConfig(id, await readJsonBody(req)), 200, headers);
+        } catch (err) {
+          if (/not found/i.test(err.message)) return sendJson(res, { error: err.message }, 404, headers);
+          throw err;
+        }
+      }
       if (req.method === "DELETE") {
-        deleteServerConfig(id);
-        return sendJson(res, { ok: true });
+        try {
+          deleteServerConfig(id);
+          return sendJson(res, { ok: true }, 200, headers);
+        } catch (err) {
+          if (/not found/i.test(err.message)) return sendJson(res, { error: err.message }, 404, headers);
+          throw err;
+        }
       }
     }
 
-    if (req.method !== "GET" && req.method !== "HEAD") {
-      return sendJson(res, { error: "Method not allowed" }, 405);
+    // /api/servers/:id/test
+    const testRoute = url.pathname.match(/^\/api\/servers\/(\d+)\/test$/);
+    if (testRoute && req.method === "POST") {
+      const id = Number(testRoute[1]);
+      const servers = loadServers();
+      const server = servers.find((s) => String(s.id) === String(id));
+      if (!server) return sendJson(res, { error: "Server not found" }, 404, headers);
+      const result = await collectServer(server);
+      return sendJson(res, result, 200, headers);
     }
 
+    // /api/servers/:id/blocking
+    const blockingRoute = url.pathname.match(/^\/api\/servers\/(\d+)\/blocking$/);
+    if (blockingRoute && req.method === "POST") {
+      const id = Number(blockingRoute[1]);
+      const body = await readJsonBody(req);
+      if (typeof body.enabled !== "boolean") {
+        return sendJson(res, { error: "enabled (boolean) is required" }, 400, headers);
+      }
+      const servers = loadServers();
+      const server = servers.find((s) => String(s.id) === String(id));
+      if (!server) return sendJson(res, { error: "Server not found" }, 404, headers);
+      const result = await toggleBlocking(server, body.enabled);
+      return sendJson(res, result, 200, headers);
+    }
+
+    // /api/servers/:id/queries
+    const queriesRoute = url.pathname.match(/^\/api\/servers\/(\d+)\/queries$/);
+    if (queriesRoute && req.method === "GET") {
+      const id = Number(queriesRoute[1]);
+      const limit = Math.min(Number(url.searchParams.get("limit") || 100), 500);
+      const servers = loadServers();
+      const server = servers.find((s) => String(s.id) === String(id));
+      if (!server) return sendJson(res, { error: "Server not found" }, 404, headers);
+      const queries = await getQueryLog(server, limit);
+      return sendJson(res, { queries }, 200, headers);
+    }
+
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      return sendJson(res, { error: "Method not allowed" }, 405, headers);
+    }
+
+    // Static file serving
     const filePath = resolveStaticPath(url.pathname);
     const file = await readFile(filePath);
+    const ext = path.extname(filePath);
+    const isVersioned = url.search.includes("v=") && IMMUTABLE_EXTS.has(ext);
     res.writeHead(200, {
-      ...securityHeaders(),
-      "Content-Type": mimeTypes[path.extname(filePath)] || "application/octet-stream",
-      "Cache-Control": "no-store"
+      ...headers,
+      "Content-Type": mimeTypes[ext] || "application/octet-stream",
+      "Cache-Control": isVersioned ? "public, max-age=31536000, immutable" : "no-store"
     });
     if (req.method !== "HEAD") res.end(file);
     else res.end();
   } catch (error) {
     if (error?.code === "ENOENT") {
       res.writeHead(404, {
-        ...securityHeaders(),
+        ...securityHeaders(httpsEnabled),
         "Content-Type": "text/plain; charset=utf-8",
         "Cache-Control": "no-store"
       });
@@ -143,7 +208,7 @@ export const requestHandler = async (req, res) => {
       return;
     }
     console.error(error);
-    sendJson(res, { error: error.message || "Internal server error" }, 500);
+    sendJson(res, { error: error.message || "Internal server error" }, 500, securityHeaders(httpsEnabled));
   }
 };
 
@@ -153,23 +218,30 @@ async function startServer() {
   });
 
   if (httpsEnabled) {
-    const tls = {
-      cert: await readFile(tlsCertFile),
-      key: await readFile(tlsKeyFile)
-    };
+    const tls = { cert: await readFile(tlsCertFile), key: await readFile(tlsKeyFile) };
     createHttpsServer(tls, requestHandler).listen(httpsPort, host, () => {
       logListeningUrls("https", httpsPort, host);
     });
   }
 }
 
+function gracefulShutdown(signal) {
+  console.log(`${signal} received — shutting down`);
+  try { db.close(); } catch {}
+  process.exit(0);
+}
+
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === fileURLToPath(new URL(`file://${process.argv[1]}`));
 if (isMain) {
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
   startServer().catch((err) => {
     console.error("Failed to start server:", err);
     process.exit(1);
   });
 }
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function logListeningUrls(protocol, listenPort, listenHost) {
   const { urls, hiddenContainerHosts, usedFallbackHost } = getListeningUrls(protocol, listenPort, listenHost);
@@ -184,26 +256,22 @@ function getListeningUrls(protocol, listenPort, listenHost) {
   const configuredHosts = parseAdvertisedHosts(advertisedHosts);
   const detectedHosts = isWildcardHost(listenHost) ? getLocalIpAddresses() : [listenHost];
   const hiddenContainerHosts = configuredHosts.length ? [] : detectedHosts.filter(isContainerOnlyAddress);
-  const hosts = configuredHosts.length ? configuredHosts : detectedHosts.filter((address) => !isContainerOnlyAddress(address));
+  const hosts = configuredHosts.length ? configuredHosts : detectedHosts.filter((a) => !isContainerOnlyAddress(a));
   const uniqueHosts = hosts.length ? [...new Set(hosts)] : ["localhost"];
   return {
     hiddenContainerHosts,
-    urls: uniqueHosts.map((urlHost) => formatListeningUrl(protocol, urlHost, listenPort)),
+    urls: uniqueHosts.map((h) => formatListeningUrl(protocol, h, listenPort)),
     usedFallbackHost: hosts.length === 0
   };
 }
 
 function parseAdvertisedHosts(value) {
-  return String(value || "")
-    .split(/[\s,]+/)
-    .map(normalizeAdvertisedHost)
-    .filter(Boolean);
+  return String(value || "").split(/[\s,]+/).map(normalizeAdvertisedHost).filter(Boolean);
 }
 
 function normalizeAdvertisedHost(value) {
   const source = String(value || "").trim();
   if (!source) return "";
-
   try {
     return new URL(source.includes("://") ? source : "http://" + source).host;
   } catch {
@@ -249,510 +317,6 @@ function formatUrlHost(urlHost) {
   return urlHost.includes(":") && !urlHost.startsWith("[") ? "[" + urlHost + "]" : urlHost;
 }
 
-function openDatabase() {
-  mkdirSync(path.dirname(databasePath), { recursive: true });
-  const database = new DatabaseSync(databasePath);
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS servers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      url TEXT NOT NULL,
-      password_cipher TEXT NOT NULL DEFAULT '',
-      version TEXT NOT NULL DEFAULT 'auto',
-      color TEXT NOT NULL DEFAULT '#39d98a',
-      enabled INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-  seedDatabase(database);
-  return database;
-}
-
-function seedDatabase(database) {
-  const count = database.prepare("SELECT COUNT(*) AS count FROM servers").get().count;
-  if (count > 0 || !existsSync(configPath)) return;
-
-  try {
-    let raw = JSON.parse(readFileSyncText(configPath));
-    if (!Array.isArray(raw)) raw = raw.servers || [];
-    raw.map(normalizeServer).filter(Boolean).forEach((server) => insertServer(database, server));
-    console.log(`Seeded ${raw.length} Pi-hole server(s) from ${configPath}`);
-  } catch (error) {
-    console.warn(`Could not seed database from ${configPath}: ${error.message}`);
-  }
-}
-
-function readFileSyncText(filePath) {
-  return readFileSync(filePath, "utf8");
-}
-
-export function loadServers() {
-  return db.prepare("SELECT * FROM servers WHERE enabled = 1 ORDER BY id").all().map(rowToServer);
-}
-
-export function normalizeServer(input, index = 0) {
-  if (!input) return null;
-  const source = input.url || input.baseUrl || input.host;
-  if (!source) return null;
-
-  const parsed = new URL(source.includes("://") ? source : `http://${source}`);
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    throw new Error("Server URL must use http or https");
-  }
-
-  parsed.pathname = parsed.pathname
-    .replace(/\/admin\/api\.php$/i, "")
-    .replace(/\/admin\/?$/i, "")
-    .replace(/\/api\/?$/i, "")
-    .replace(/\/+$/g, "");
-  parsed.search = "";
-  parsed.hash = "";
-
-  return {
-    id: input.id || null,
-    name: input.name || parsed.hostname || `Pi-hole ${index + 1}`,
-    url: parsed.toString().replace(/\/$/, ""),
-    password: input.password || input.token || input.apiKey || "",
-    version: String(input.version || input.apiVersion || "auto").toLowerCase(),
-    color: input.color || colors[index % colors.length],
-    enabled: input.enabled === undefined ? true : input.enabled !== false && input.enabled !== "false"
-  };
-}
-
-export function listServerConfigs() {
-  return db.prepare("SELECT * FROM servers ORDER BY id").all().map(redactServerRow);
-}
-
-export function createServerConfig(input) {
-  const server = normalizeServer(input);
-  if (!server) throw new Error("Server URL is required");
-  const id = insertServer(db, server);
-  return redactServerRow(db.prepare("SELECT * FROM servers WHERE id = ?").get(id));
-}
-
-export function updateServerConfig(id, input) {
-  const existing = db.prepare("SELECT * FROM servers WHERE id = ?").get(id);
-  if (!existing) throw new Error("Server not found");
-
-  const clearPassword = input.clearPassword === true;
-  const hasPasswordInput = Object.prototype.hasOwnProperty.call(input, "password");
-  const password = clearPassword ? "" : hasPasswordInput ? input.password : decryptPassword(existing.password_cipher);
-  const normalized = normalizeServer({ ...input, password });
-  if (!normalized) throw new Error("Server URL is required");
-  const passwordCipher = clearPassword ? "" : hasPasswordInput ? encryptPassword(input.password) : existing.password_cipher;
-  db.prepare(`
-    UPDATE servers
-    SET name = ?, url = ?, password_cipher = ?, version = ?, color = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `).run(
-    normalized.name,
-    normalized.url,
-    passwordCipher,
-    normalized.version,
-    normalized.color,
-    normalized.enabled === false ? 0 : 1,
-    id
-  );
-  return redactServerRow(db.prepare("SELECT * FROM servers WHERE id = ?").get(id));
-}
-
-export function deleteServerConfig(id) {
-  db.prepare("DELETE FROM servers WHERE id = ?").run(id);
-}
-
-function insertServer(database, server) {
-  const result = database.prepare(`
-    INSERT INTO servers (name, url, password_cipher, version, color, enabled)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(
-    server.name,
-    server.url,
-    encryptPassword(server.password),
-    server.version,
-    server.color,
-    server.enabled === false ? 0 : 1
-  );
-  return result.lastInsertRowid;
-}
-
-function rowToServer(row) {
-  return {
-    id: String(row.id),
-    name: row.name,
-    url: row.url,
-    password: decryptPassword(row.password_cipher),
-    version: row.version,
-    color: row.color
-  };
-}
-
-function redactServerRow(row) {
-  return {
-    id: row.id,
-    name: row.name,
-    url: row.url,
-    version: row.version,
-    color: row.color,
-    enabled: Boolean(row.enabled),
-    hasPassword: Boolean(row.password_cipher)
-  };
-}
-
-export function encryptPassword(password) {
-  if (!password) return "";
-  const key = encryptionKey();
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
-  const encrypted = Buffer.concat([cipher.update(String(password), "utf8"), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return `v1:${iv.toString("base64url")}:${tag.toString("base64url")}:${encrypted.toString("base64url")}`;
-}
-
-export function decryptPassword(ciphertext) {
-  if (!ciphertext) return "";
-  const [version, iv, tag, encrypted] = String(ciphertext).split(":");
-  if (version !== "v1" || !iv || !tag || !encrypted) throw new Error("Unsupported encrypted password format");
-
-  const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(iv, "base64url"));
-  decipher.setAuthTag(Buffer.from(tag, "base64url"));
-  return Buffer.concat([
-    decipher.update(Buffer.from(encrypted, "base64url")),
-    decipher.final()
-  ]).toString("utf8");
-}
-
-function encryptionKey() {
-  if (!encryptionSecret) {
-    throw new Error("CONFIG_ENCRYPTION_KEY is required before storing Pi-hole passwords");
-  }
-
-  const decoded = Buffer.from(encryptionSecret, "base64");
-  if (decoded.length === 32) return decoded;
-  return createHash("sha256").update(encryptionSecret).digest();
-}
-
-export async function collectSnapshot(rawServers) {
-  const servers = rawServers.map(normalizeServer).filter(Boolean);
-  const results = await Promise.all(servers.map((server) => collectServer(server)));
-  return {
-    generatedAt: new Date().toISOString(),
-    totals: aggregate(results),
-    servers: results
-  };
-}
-
-export async function collectServer(server) {
-  const started = Date.now();
-  try {
-    const data = server.version === "5"
-      ? await fetchV5(server)
-      : server.version === "6"
-        ? await fetchV6(server)
-        : await fetchAuto(server);
-
-    return {
-      id: server.id,
-      name: server.name,
-      url: server.url,
-      color: server.color,
-      online: true,
-      version: data.version,
-      latencyMs: Date.now() - started,
-      summary: data.summary,
-      queryTypes: data.queryTypes,
-      topDomains: data.topDomains,
-      topBlocked: data.topBlocked,
-      topClients: data.topClients,
-      upstreams: data.upstreams,
-      history: data.history,
-      error: null
-    };
-  } catch (error) {
-    return {
-      id: server.id,
-      name: server.name,
-      url: server.url,
-      color: server.color,
-      online: false,
-      version: server.version === "auto" ? "unknown" : server.version,
-      latencyMs: Date.now() - started,
-      summary: emptySummary(),
-      queryTypes: {},
-      topDomains: [],
-      topBlocked: [],
-      topClients: [],
-      upstreams: [],
-      history: [],
-      error: error.message
-    };
-  }
-}
-
-async function fetchAuto(server) {
-  try {
-    return await fetchV6(server);
-  } catch (v6Error) {
-    try {
-      return await fetchV5(server);
-    } catch (v5Error) {
-      throw new Error(`v6: ${v6Error.message}; v5: ${v5Error.message}`);
-    }
-  }
-}
-
-export async function fetchV6(server) {
-  const headers = await v6Headers(server);
-  const [summaryRaw, queryTypesRaw, topDomainsRaw, topBlockedRaw, topClientsRaw, upstreamsRaw, historyRaw, blockingRaw] = await Promise.all([
-    getJson(`${server.url}/api/stats/summary`, { headers }),
-    getJson(`${server.url}/api/stats/query_types`, { headers }, true),
-    getJson(`${server.url}/api/stats/top_domains?count=10`, { headers }, true),
-    getJson(`${server.url}/api/stats/top_domains?blocked=true&count=10`, { headers }, true),
-    getJson(`${server.url}/api/stats/top_clients?count=10`, { headers }, true),
-    getJson(`${server.url}/api/stats/upstreams`, { headers }, true),
-    getJson(`${server.url}/api/history`, { headers }, true),
-    getJson(`${server.url}/api/dns/blocking`, { headers }, true)
-  ]);
-
-  return {
-    version: "6",
-    summary: normalizeV6Summary(summaryRaw, blockingRaw),
-    queryTypes: objectFromAny(queryTypesRaw?.types || queryTypesRaw?.querytypes || queryTypesRaw),
-    topDomains: listFromAny(topDomainsRaw?.domains?.allowed || topDomainsRaw?.top_domains || topDomainsRaw?.domains || topDomainsRaw),
-    topBlocked: listFromAny(topBlockedRaw?.domains?.blocked || topBlockedRaw?.top_ads || topBlockedRaw?.domains || topBlockedRaw),
-    topClients: listFromAny(topClientsRaw?.clients || topClientsRaw?.top_clients || topClientsRaw),
-    upstreams: listFromAny(upstreamsRaw?.upstreams || upstreamsRaw?.forward_destinations || upstreamsRaw),
-    history: historyFromAny(historyRaw)
-  };
-}
-
-async function v6Headers(server) {
-  if (!server.password) return {};
-  const cached = sessionCache.get(server.id);
-  if (cached?.expires > Date.now() + 5000) return { "X-FTL-SID": cached.sid };
-
-  const auth = await getJson(`${server.url}/api/auth`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password: server.password })
-  });
-  const session = auth.session || auth;
-  const sid = session.sid;
-  if (!sid && session.valid === true && /no password set/i.test(String(session.message || ""))) {
-    return {};
-  }
-  if (!sid) throw new Error(v6MissingSidMessage(session));
-  sessionCache.set(server.id, {
-    sid,
-    expires: Date.now() + Number(session.validity || 300) * 1000
-  });
-  return { "X-FTL-SID": sid };
-}
-
-function v6MissingSidMessage(session) {
-  const parts = ["Pi-hole v6 auth did not return a session id"];
-  if (session.totp) {
-    parts.push("2FA appears to be enabled; use a Pi-hole application password in Pidash");
-  }
-  if (session.valid === false) {
-    parts.push("Pi-hole marked the session invalid");
-  }
-  if (session.message) {
-    parts.push(String(session.message));
-  }
-  return parts.join(": ");
-}
-
-export async function fetchV5(server) {
-  const auth = server.password ? `&auth=${encodeURIComponent(server.password)}` : "";
-  const api = `${server.url}/admin/api.php`;
-  const [summaryRaw, queryTypesRaw, topItemsRaw, topClientsRaw, overtimeRaw, forwardedRaw] = await Promise.all([
-    getJson(`${api}?summaryRaw${auth}`),
-    getJson(`${api}?getQueryTypes${auth}`, {}, true),
-    getJson(`${api}?topItems=10${auth}`, {}, true),
-    getJson(`${api}?topClients=10${auth}`, {}, true),
-    getJson(`${api}?overTimeData10mins${auth}`, {}, true),
-    getJson(`${api}?getForwardDestinations${auth}`, {}, true)
-  ]);
-
-  return {
-    version: "5",
-    summary: normalizeV5Summary(summaryRaw),
-    queryTypes: objectFromAny(queryTypesRaw?.querytypes || queryTypesRaw),
-    topDomains: listFromAny(topItemsRaw?.top_queries || topItemsRaw?.top_sources || []),
-    topBlocked: listFromAny(topItemsRaw?.top_ads || []),
-    topClients: listFromAny(topClientsRaw?.top_sources || topClientsRaw?.top_clients || topClientsRaw),
-    upstreams: listFromAny(forwardedRaw?.forward_destinations || forwardedRaw),
-    history: historyFromAny(overtimeRaw)
-  };
-}
-
-export async function getJson(url, options = {}, optional = false) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    if (!response.ok) {
-      if (optional && [401, 403, 404].includes(response.status)) return null;
-      const detail = await responseErrorDetail(response);
-      throw new Error(`${response.status} ${response.statusText} from ${new URL(url).pathname}${detail ? `: ${detail}` : ""}`);
-    }
-    if (response.status === 204) return null;
-    return await response.json();
-  } catch (error) {
-    if (optional) return null;
-    if (error.name === "AbortError") throw new Error(`Timed out calling ${new URL(url).host}`);
-    throw new Error(formatFetchError(error, url));
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function responseErrorDetail(response) {
-  const type = response.headers.get("content-type") || "";
-  try {
-    if (type.includes("application/json")) {
-      const body = await response.json();
-      return body?.error?.message || body?.error?.key || body?.message || "";
-    }
-    const body = await response.text();
-    return body.trim().slice(0, 200);
-  } catch {
-    return "";
-  }
-}
-
-function formatFetchError(error, url) {
-  const target = new URL(url);
-  const cause = deepestCause(error);
-  const code = cause?.code || error?.cause?.code || error?.code;
-  const certCodes = new Set([
-    "DEPTH_ZERO_SELF_SIGNED_CERT",
-    "SELF_SIGNED_CERT_IN_CHAIN",
-    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-    "CERT_HAS_EXPIRED",
-    "ERR_TLS_CERT_ALTNAME_INVALID"
-  ]);
-
-  if (certCodes.has(code)) {
-    return `TLS certificate rejected for ${target.origin}. Use http if your Pi-hole exposes the API over LAN HTTP, or set NODE_TLS_REJECT_UNAUTHORIZED=0 for a self-signed HTTPS certificate.`;
-  }
-
-  if (code === "ECONNREFUSED") return `Connection refused by ${target.origin}`;
-  if (code === "ENOTFOUND") return `Could not resolve ${target.hostname}`;
-  return cause?.message || error.message || `Failed to call ${target.origin}`;
-}
-
-function deepestCause(error) {
-  let current = error;
-  while (current?.cause && current.cause !== current) current = current.cause;
-  return current;
-}
-
-function normalizeV5Summary(raw) {
-  return {
-    queries: number(raw?.dns_queries_today ?? raw?.total_queries),
-    blocked: number(raw?.ads_blocked_today),
-    blockRate: number(raw?.ads_percentage_today),
-    domains: number(raw?.domains_being_blocked),
-    forwarded: number(raw?.queries_forwarded),
-    cached: number(raw?.queries_cached),
-    clients: number(raw?.unique_clients),
-    status: raw?.status || "unknown"
-  };
-}
-
-function normalizeV6Summary(raw, blockingRaw) {
-  const queries = number(pathValue(raw, ["queries.total", "queries.total_today", "total_queries", "dns_queries_today"]));
-  const blocked = number(pathValue(raw, ["queries.blocked", "queries.blocked_today", "ads_blocked_today"]));
-  return {
-    queries,
-    blocked,
-    blockRate: number(pathValue(raw, ["queries.percent_blocked", "ads_percentage_today"])) || (queries ? (blocked / queries) * 100 : 0),
-    domains: number(pathValue(raw, ["gravity.domains_being_blocked", "gravity.domains", "domains_being_blocked"])),
-    forwarded: number(pathValue(raw, ["queries.forwarded", "queries.forwarded_today", "queries_forwarded"])),
-    cached: number(pathValue(raw, ["queries.cached", "queries.cached_today", "queries_cached"])),
-    clients: number(pathValue(raw, ["clients.active", "clients.total", "unique_clients"])),
-    status: blockingRaw?.blocking === false ? "disabled" : "enabled"
-  };
-}
-
-function aggregate(servers) {
-  const online = servers.filter((server) => server.online);
-  const totals = online.reduce((acc, server) => {
-    acc.queries += server.summary.queries;
-    acc.blocked += server.summary.blocked;
-    acc.domains += server.summary.domains;
-    acc.forwarded += server.summary.forwarded;
-    acc.cached += server.summary.cached;
-    acc.clients += server.summary.clients;
-    return acc;
-  }, emptySummary());
-  totals.blockRate = totals.queries ? (totals.blocked / totals.queries) * 100 : 0;
-  return {
-    ...totals,
-    online: online.length,
-    total: servers.length
-  };
-}
-
-function emptySummary() {
-  return { queries: 0, blocked: 0, blockRate: 0, domains: 0, forwarded: 0, cached: 0, clients: 0, status: "unknown" };
-}
-
-function objectFromAny(input) {
-  if (!input || typeof input !== "object") return {};
-  if (Array.isArray(input)) {
-    return Object.fromEntries(input.map((item) => [item.name || item.type || item[0], number(item.count || item.value || item[1])]).filter(([key]) => key));
-  }
-  return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, number(value?.count ?? value)]));
-}
-
-function listFromAny(input) {
-  if (!input || typeof input !== "object") return [];
-  if (Array.isArray(input)) {
-    return input.map((item) => ({
-      label: String(item.domain || item.client || item.name || item.ip || item[0] || "unknown"),
-      count: number(item.count ?? item.queries ?? item.value ?? item[1])
-    })).filter((item) => item.label !== "unknown" || item.count);
-  }
-  return Object.entries(input).map(([label, count]) => ({ label, count: number(count?.count ?? count) }));
-}
-
-function historyFromAny(input) {
-  const raw = input?.history || input?.domains_over_time || input?.over_time_data || input;
-  if (!raw || typeof raw !== "object") return [];
-  if (Array.isArray(raw)) {
-    return raw.map((item) => ({
-      label: String(item.timestamp || item.time || item.label || ""),
-      queries: number(item.queries ?? item.total ?? item.queries_total),
-      blocked: number(item.blocked ?? item.ads ?? item.ads_total)
-    })).slice(-48);
-  }
-  return Object.entries(raw).map(([label, value]) => ({
-    label,
-    queries: number(value?.queries ?? value?.queries_total ?? value?.total ?? value),
-    blocked: number(value?.blocked ?? value?.ads_total ?? value?.ads ?? 0)
-  })).slice(-48);
-}
-
-function pathValue(object, paths) {
-  for (const item of paths) {
-    const value = item.split(".").reduce((acc, key) => acc?.[key], object);
-    if (value !== undefined && value !== null) return value;
-  }
-  return undefined;
-}
-
-function number(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function slug(value) {
-  return String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "pihole";
-}
-
 function resolveStaticPath(pathname) {
   const cleaned = decodeURIComponent(pathname).replace(/\\/g, "/");
   const relative = cleaned === "/" ? "index.html" : cleaned.replace(/^\/+/, "");
@@ -771,157 +335,23 @@ async function readJsonBody(req) {
   return body ? JSON.parse(body) : {};
 }
 
-function sendJson(res, data, status = 200) {
+function sendJson(res, data, status = 200, headers = {}) {
   res.writeHead(status, {
-    ...securityHeaders(),
+    ...headers,
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store"
   });
   res.end(JSON.stringify(data));
 }
 
-export function sendUnauthorized(res) {
-  const headers = {
-    ...securityHeaders(),
-    "Content-Type": "text/plain; charset=utf-8",
-    "Cache-Control": "no-store"
-  };
-  if (authMode === "basic") headers["WWW-Authenticate"] = 'Basic realm="Pi-hole Dashboard"';
-  res.writeHead(401, headers);
-  res.end("Authentication required");
-}
+// ── Re-exports (backward compat for tests and external consumers) ─────────────
 
-export function isAuthorized(req) {
-  if (authMode === "none") return true;
-  if (authMode === "proxy") return isProxyAuthorized(req);
-  if (authMode !== "basic") return false;
-  if (!dashboardPassword) return false;
-
-  const header = req.headers.authorization || "";
-  if (!header.startsWith("Basic ")) return false;
-
-  try {
-    const decoded = Buffer.from(header.slice(6), "base64").toString("utf8");
-    const separator = decoded.indexOf(":");
-    if (separator < 0) return false;
-    const username = decoded.slice(0, separator);
-    const password = decoded.slice(separator + 1);
-    return safeEqual(username, dashboardUser) && safeEqual(password, dashboardPassword);
-  } catch {
-    return false;
-  }
-}
-
-export function isProxyAuthorized(req) {
-  // Only accept proxied identity headers when the request comes from a trusted proxy
-  if (!isRequestFromTrustedProxy(req)) return false;
-  const username = headerValue(req, authProxyUserHeader);
-  return Boolean(username);
-}
-
-export function isRequestFromTrustedProxy(req) {
-  try {
-    const remote = String(req.socket?.remoteAddress || req.connection?.remoteAddress || "");
-    // Normalize IPv4-mapped IPv6 addresses like ::ffff:127.0.0.1
-    const normalized = remote.replace(/^::ffff:/, "");
-    return trustedProxyRules.some((rule) => matchesTrustedProxyRule(normalized, rule));
-  } catch {
-    return false;
-  }
-}
-
-export function parseTrustedProxyRules(value) {
-  return String(value || "")
-    .split(/[,\s]+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      if (entry.endsWith("*")) return { type: "prefix", value: entry.slice(0, -1) };
-      if (entry.includes("/")) {
-        const [address, bits] = entry.split("/");
-        const prefixLength = Number(bits);
-        if (isIP(address) === 4 && Number.isInteger(prefixLength) && prefixLength >= 0 && prefixLength <= 32) {
-          return { type: "cidr4", address, prefixLength };
-        }
-      }
-      return { type: "exact", value: entry };
-    });
-}
-
-export function matchesTrustedProxyRule(address, rule) {
-  if (!address || !rule) return false;
-  if (rule.type === "exact") return address === rule.value;
-  if (rule.type === "prefix") return Boolean(rule.value) && address.startsWith(rule.value);
-  if (rule.type === "cidr4") return isIpv4InCidr(address, rule.address, rule.prefixLength);
-  return false;
-}
-
-function isIpv4InCidr(address, network, prefixLength) {
-  if (isIP(address) !== 4 || isIP(network) !== 4) return false;
-  const mask = prefixLength === 0 ? 0 : (0xffffffff << (32 - prefixLength)) >>> 0;
-  return (ipv4ToNumber(address) & mask) === (ipv4ToNumber(network) & mask);
-}
-
-function ipv4ToNumber(address) {
-  return address.split(".").reduce((acc, part) => ((acc << 8) + Number(part)) >>> 0, 0);
-}
-
-function validateCsrf(req) {
-  // If a CSRF secret is configured, require the header to match.
-  if (csrfSecret) {
-    const token = req.headers["x-csrf-token"] || req.headers["x-xsrf-token"] || "";
-    return token === csrfSecret;
-  }
-
-  // Fallback: require a same-origin request via Origin/Referer check.
-  const origin = req.headers.origin || req.headers.referer || "";
-  if (!origin) return false;
-  try {
-    const parsed = new URL(origin);
-    return parsed.host === (req.headers.host || "");
-  } catch {
-    return false;
-  }
-}
-
-export function currentUser(req) {
-  if (authMode === "proxy") {
-    return {
-      mode: authMode,
-      username: headerValue(req, authProxyUserHeader),
-      email: headerValue(req, authProxyEmailHeader),
-      name: headerValue(req, authProxyNameHeader)
-    };
-  }
-
-  return {
-    mode: authMode,
-    username: authMode === "basic" ? dashboardUser : ""
-  };
-}
-
-function headerValue(req, headerName) {
-  const value = req.headers[headerName];
-  if (Array.isArray(value)) return value[0] || "";
-  return value || "";
-}
-
-function normalizeHeaderName(name) {
-  return String(name).trim().toLowerCase();
-}
-
-function safeEqual(actual, expected) {
-  const actualBuffer = Buffer.from(String(actual));
-  const expectedBuffer = Buffer.from(String(expected));
-  if (actualBuffer.length !== expectedBuffer.length) return false;
-  return timingSafeEqual(actualBuffer, expectedBuffer);
-}
-
-function securityHeaders() {
-  return {
-    "Content-Security-Policy": "default-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-    "Referrer-Policy": "no-referrer",
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY"
-  };
-}
+export {
+  encryptPassword, decryptPassword,
+  isAuthorized, isProxyAuthorized, isRequestFromTrustedProxy,
+  parseTrustedProxyRules, matchesTrustedProxyRule,
+  sendUnauthorized, currentUser,
+  normalizeServer, loadServers, listServerConfigs,
+  createServerConfig, updateServerConfig, deleteServerConfig,
+  collectSnapshot, collectServer, fetchV6, fetchV5, getJson
+};
