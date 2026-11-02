@@ -12,7 +12,8 @@ if [ "${ENABLE_HTTPS:-false}" = "true" ]; then
 
   if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
     mkdir -p "$(dirname "$cert_file")" "$(dirname "$key_file")"
-    openssl req -x509 -newkey rsa:2048 -sha256 -nodes \
+    # ECDSA P-256: smaller, faster, equally strong to RSA-2048
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -sha256 -nodes \
       -keyout "$key_file" \
       -out "$cert_file" \
       -days "${TLS_CERT_DAYS:-3650}" \

@@ -1,6 +1,6 @@
 {
   "name": "pihole-multi-dashboard",
-  "version": "0.1.1",
+  "version": "2.0.0",
   "private": true,
   "description": "Dockerized multi-server Pi-hole dashboard",
   "type": "module",

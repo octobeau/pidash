@@ -21,8 +21,8 @@ services:
       AUTH_PROXY_EMAIL_HEADER: ${AUTH_PROXY_EMAIL_HEADER:-x-forwarded-email}
       AUTH_PROXY_NAME_HEADER: ${AUTH_PROXY_NAME_HEADER:-x-forwarded-name}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-127.0.0.1,::1}
-      CSRF_SECRET: ${CSRF_SECRET:-}
       NODE_TLS_REJECT_UNAUTHORIZED: ${NODE_TLS_REJECT_UNAUTHORIZED:-1}
+      PIHOLE_TIMEOUT_MS: ${PIHOLE_TIMEOUT_MS:-7000}
       # Optional: seed an empty database from a JSON config file.
       # PIHOLE_CONFIG: /app/config/piholes.json
     volumes:
