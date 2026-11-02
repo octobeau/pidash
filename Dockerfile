@@ -7,6 +7,7 @@ ENV PORT=8080
 RUN apk add --no-cache openssl su-exec
 
 COPY package.json server.js ./
+COPY src ./src
 COPY public ./public
 COPY config ./config
 COPY docker-entrypoint.sh ./
