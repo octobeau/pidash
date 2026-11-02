@@ -1,6 +1,6 @@
 # Pi-hole Multi-Dashboard
 
-A small Dockerized dashboard for multiple Pi-hole servers. It shows aggregate metrics across all configured servers plus individual server cards, top lists, and comparisons.
+A small Dockerized dashboard for multiple Pi-hole servers. It shows aggregate metrics across all configured servers plus individual server cards, top lists, query log, history charts, alerts, and side-by-side comparisons.
 
 The backend proxies Pi-hole API calls so the browser avoids CORS issues. It tries the Pi-hole v6 REST API first, then falls back to the v5 `admin/api.php` API when `version` is set to `auto`.
 
@@ -164,7 +164,7 @@ Required proxy-mode rules:
 - Pidash must not be directly reachable except from the trusted proxy.
 - The proxy must strip incoming client-supplied identity headers before setting its own.
 - `TRUSTED_PROXIES` must match the actual remote address Pidash sees for the proxy.
-- Keep `CSRF_SECRET` unset unless your proxy injects `X-CSRF-Token` or `X-XSRF-Token` on browser API requests. With `CSRF_SECRET` unset, Pidash uses same-origin `Origin` / `Referer` validation.
+- Pidash uses same-origin `Origin` / `Referer` validation for CSRF protection. No `CSRF_SECRET` is required.
 
 Common header examples:
 
@@ -221,11 +221,11 @@ DASHBOARD_PUBLIC_HOST=
 # AUTH_PROXY_EMAIL_HEADER=x-forwarded-email
 # AUTH_PROXY_NAME_HEADER=x-forwarded-name
 # TRUSTED_PROXIES=127.0.0.1,::1
-# Only set CSRF_SECRET when a proxy injects the matching token header.
-# CSRF_SECRET=
-
 # Optional. Set to 0 only when polling Pi-hole HTTPS endpoints with self-signed certs.
 NODE_TLS_REJECT_UNAUTHORIZED=1
+
+# Optional. Per-request timeout in milliseconds for Pi-hole API calls (default: 7000).
+# PIHOLE_TIMEOUT_MS=7000
 ```
 
 Keep `.env` private. It is ignored by Git.
